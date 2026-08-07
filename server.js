@@ -7,7 +7,7 @@ import path from "path";
 import { CheerioCrawler } from "crawlee";
 
 // CHANGE THESE IF YOU WANT TO TEST ANOTHER LLM OR EMBEDDING MODEL.
-const GEN_MODEL = "gemma4:12b";
+const GEN_MODEL = "qwen3:4b";
 const EMBED_MODEL = "embeddinggemma"; // If you change this, remember you need to crawl the site again.
 
 const app = express();
@@ -325,11 +325,22 @@ Search query:`;
       const rewriteRes = await ollama.chat({
         model: model,
         messages: [{ role: "user", content: rewritePrompt }],
-        stream: false,
-        think: false,
+        stream: true,
+        think: isThinking,
       });
 
-      const rewritten = rewriteRes.message.content.replace(/["']/g, "").trim();
+      let rewritten= "";
+      for await (const chunk of rewriteRes) {
+        if (chunk.message.thinking) {
+          res.write(
+            `data: ${JSON.stringify({ thinking: chunk.message.thinking })}\n\n`,
+          );
+        } else if (chunk.message.content) {
+          rewritten += chunk.message.content;
+        }
+      }
+
+      rewritten = rewritten.replace(/["']/g, "").trim();
       if (
         rewritten.toUpperCase() === "NO_SEARCH" ||
         rewritten.toUpperCase() === "IGNORE_SEARCH"
