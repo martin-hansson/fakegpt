@@ -6,6 +6,10 @@ import fs from "fs/promises";
 import path from "path";
 import { CheerioCrawler } from "crawlee";
 
+// CHANGE THESE IF YOU WANT TO TEST ANOTHER LLM OR EMBEDDING MODEL.
+const GEN_MODEL = "llama3.2:3b";
+const EMBED_MODEL = "nomic-embed-text"; // If you change this, remember you need to crawl the site again.
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
@@ -18,7 +22,6 @@ let FRONTEND_DIR =
 let DATA_DIR =
   global.DATA_DIR || process.env.DATA_DIR || path.join(process.cwd(), "data");
 
-// Bulletproof fallback: If it resolved to the root directory /data (which crashes on macOS), override it safely.
 if (DATA_DIR === "/data") {
   DATA_DIR = path.join(os.homedir(), ".chatlab_data");
 }
@@ -26,7 +29,6 @@ const LOCAL_INDEX_FILE = path.join(DATA_DIR, "local_index.json");
 const ONLINE_CACHE_FILE = path.join(DATA_DIR, "index.json");
 const CHATS_FILE = path.join(DATA_DIR, "chats.json");
 
-// Ensure the DATA_DIR exists (critical when running inside Electron)
 import fsSync from "fs";
 if (!fsSync.existsSync(DATA_DIR)) {
   fsSync.mkdirSync(DATA_DIR, { recursive: true });
@@ -37,7 +39,6 @@ const ollama = new Ollama({ host: "http://localhost:11434" });
 // Serve the compiled Vite static assets
 app.use(express.static(FRONTEND_DIR));
 
-const EMBED_MODEL = "nomic-embed-text";
 const SIMILARITY_THRESHOLD = 0.1;
 
 function cosineSimilarity(vecA, vecB) {
@@ -54,7 +55,6 @@ function cosineSimilarity(vecA, vecB) {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Ensure data directory and files exist
 async function initDataStorage() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
@@ -168,7 +168,7 @@ app.post("/api/crawl", async (req, res) => {
     for (let c of rawChunks) {
       try {
         let embeddingRes = await ollama.embeddings({
-          model: "nomic-embed-text",
+          model: EMBED_MODEL,
           prompt: `${c.title}\n${c.text}`,
         });
         embeddedChunks.push({
@@ -183,7 +183,7 @@ app.post("/api/crawl", async (req, res) => {
           e.message,
         );
         throw new Error(
-          "Embedding model failed. Make sure to run: ollama pull nomic-embed-text",
+          "Embedding model failed. Make sure to run: ollama pull ${}",
         );
       }
     }
@@ -221,7 +221,7 @@ app.get("/api/chats/:id", async (req, res) => {
 
 app.post("/api/chats/:id", async (req, res) => {
   const { id } = req.params;
-  const { messages, targetUrl, model = "llama3.2:3b" } = req.body;
+  const { messages, targetUrl, model = GEN_MODEL } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -281,6 +281,7 @@ app.post("/api/chats/:id", async (req, res) => {
       const rewritePrompt = `Rewrite the user's query into a concise search engine query, using the chat history to resolve context if needed. Output ONLY the search query. Today's date is ${currentDate}.
 CRITICAL RULE 1: If the user asks about a recurring event or current status without specifying a time frame (e.g., "who won the superbowl", "who is the president"), you MUST append the current year (${currentYear}) to the search query so it retrieves the latest information.
 CRITICAL RULE 2: If the user is just saying hello, asking about your capabilities (e.g., "what can you do?", "who are you?"), or making general conversation that doesn't require looking up facts, you MUST output exactly: NO_SEARCH
+CRITICAL RULE 3: ONLY use the chat history to resolve context if the user's query contains pronouns (it, they, he, she) or explicitly refers to the previous topic. If it is a completely new topic or a general question (e.g., "what's the news", "what is happening in the world"), DO NOT use the chat history. Treat it as a standalone query.
 
 Example 1:
 User's latest query: "who won the superbowl?"
@@ -301,11 +302,20 @@ Assistant: The Seattle Seahawks won Super Bowl LX.
 User's latest query: "what about the previous years?"
 Search query: superbowl winners before ${currentYear}
 
+Example 5:
+Chat history:
+User: who are you?
+Assistant: I am FakeGPT...
+User's latest query: "Whats happening in the world?"
+Search query: latest world news ${currentYear}
+
 Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
 Search query:`;
 
-      res.write(`event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`);
+      res.write(
+        `event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`,
+      );
       const rewriteRes = await ollama.chat({
         model: model,
         messages: [{ role: "user", content: rewritePrompt }],
@@ -338,7 +348,9 @@ Search query:`;
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
       onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
 
-      res.write(`event: ${JSON.stringify({ type: "message", content: `Searching for "${searchQuery}"...` })}\n\n`);
+      res.write(
+        `event: ${JSON.stringify({ type: "message", content: `Searching for "${searchQuery}"...` })}\n\n`,
+      );
       // Load local chunks
       for (const key of Object.keys(localCheck)) {
         if (localCheck[key].chunks) {
@@ -442,7 +454,9 @@ Search query:`;
         console.log(
           `Agent loop: Attempt ${attempts} failed. Searching web for: "${currentSearchQuery}"`,
         );
-        res.write(`event: ${JSON.stringify({ type: "message", content: `Searching  for "${currentSearchQuery}"...` })}\n\n`);
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Searching  for "${currentSearchQuery}"...` })}\n\n`,
+        );
 
         // Add a small delay between retries to protect students from DuckDuckGo IP bans
         if (attempts > 1) {
@@ -494,7 +508,9 @@ Search query:`;
           });
           let validUrls = [];
           for (const item of urlsToCrawl) {
-            res.write(`event: ${JSON.stringify({type: "url", content: item.url})}\n\n`);
+            res.write(
+              `event: ${JSON.stringify({ type: "url", content: item.url })}\n\n`,
+            );
             try {
               const origin = new URL(item.url).origin;
               const pathname = new URL(item.url).pathname;
@@ -565,7 +581,9 @@ Search query:`;
         }
 
         // Generate new query
-        res.write(`event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`);
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
+        );
         const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
 
 Example 1:
@@ -602,7 +620,9 @@ New Search Query:`;
       similarity: c.similarity || 0,
     }));
 
-    res.write(`event: ${JSON.stringify({ type: "message", content: `Generating response...` })}\n\n`);
+    res.write(
+      `event: ${JSON.stringify({ type: "message", content: `Generating response...` })}\n\n`,
+    );
 
     // Prepare Context for Final Generation
     const currentDateStr = new Date().toLocaleDateString("en-US", {
@@ -640,7 +660,17 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
 
     const ollamaMessages = [
       { role: "system", content: systemContent },
-      ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ...messages.map((m, i) => {
+        if (i === messages.length - 1 && selectedChunks.length > 0) {
+          return {
+            role: m.role,
+            content:
+              m.content +
+              "\n\n(Reminder: Base your answer strictly on the provided Context. Add a citation at the end of EVERY factual sentence using the format [[1]](URL). Do not list references at the end.)",
+          };
+        }
+        return { role: m.role, content: m.content };
+      }),
     ];
 
     let fullContent = "";
@@ -679,7 +709,10 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
         role: "assistant",
         content: fullContent,
         sources: topK || [],
-        rewrittenQuery: queriesAttempted.length > 0 ? queriesAttempted.join(" ➔ ") : searchQuery,
+        rewrittenQuery:
+          queriesAttempted.length > 0
+            ? queriesAttempted.join(" ➔ ")
+            : searchQuery,
       },
     ];
     chat.messages = newMessages;
