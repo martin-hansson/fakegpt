@@ -7,8 +7,8 @@ import path from "path";
 import { CheerioCrawler } from "crawlee";
 
 // CHANGE THESE IF YOU WANT TO TEST ANOTHER LLM OR EMBEDDING MODEL.
-const GEN_MODEL = "llama3.2:3b";
-const EMBED_MODEL = "nomic-embed-text"; // If you change this, remember you need to crawl the site again.
+const GEN_MODEL = "gemma4:12b";
+const EMBED_MODEL = "embeddinggemma"; // If you change this, remember you need to crawl the site again.
 
 const app = express();
 app.use(cors());
@@ -35,6 +35,9 @@ if (!fsSync.existsSync(DATA_DIR)) {
 }
 
 const ollama = new Ollama({ host: "http://localhost:11434" });
+
+const isThinking = await ollama.show({ model: GEN_MODEL })
+  .then((res) => res.capabilities?.includes("thinking") || false);
 
 // Serve the compiled Vite static assets
 app.use(express.static(FRONTEND_DIR));
@@ -221,7 +224,7 @@ app.get("/api/chats/:id", async (req, res) => {
 
 app.post("/api/chats/:id", async (req, res) => {
   const { id } = req.params;
-  const { messages, targetUrl, userLocation, model = "llama3.2:3b" } = req.body;
+  const { messages, targetUrl, userLocation, model = GEN_MODEL } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -254,6 +257,7 @@ app.post("/api/chats/:id", async (req, res) => {
           model: model,
           messages: [{ role: "user", content: titlePrompt }],
           stream: false,
+          think: false,
         });
         chat.title = titleRes.message.content.replace(/["*]/g, "").trim();
       } catch (e) {
@@ -322,6 +326,7 @@ Search query:`;
         model: model,
         messages: [{ role: "user", content: rewritePrompt }],
         stream: false,
+        think: false,
       });
 
       const rewritten = rewriteRes.message.content.replace(/["']/g, "").trim();
@@ -437,12 +442,16 @@ Search query:`;
       let skipEval = attempts === 1 && topK.length > 0 && !hasOnlineSource;
 
       // Evaluate if context has answer
-      if (!skipEval && contextText.trim().length > 0) {
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Evaluating search results...` })}\n\n`,
+        );
+        if (!skipEval && contextText.trim().length > 0) {
         const evalPrompt = `Context:\n${contextText}\n\nQuestion: "${userQuery}"\n\nDoes the context contain enough information to fully answer the question? Reply EXACTLY with 'YES' or 'NO'.`;
         const evalRes = await ollama.chat({
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
           stream: false,
+          think: false,
         });
         const evalText = evalRes.message.content.trim().toUpperCase();
 
@@ -478,6 +487,7 @@ New Search Query:`;
             model: model,
             messages: [{ role: "user", content: newQueryPrompt }],
             stream: false,
+            think: false,
           });
           currentSearchQuery = newQueryRes.message.content
             .replace(/["']/g, "")
@@ -611,6 +621,31 @@ New Search Query:`;
           await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
         }
 
+        // Generate new query
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
+        );
+        const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
+
+Example 1:
+Failed Query: "fifa winners"
+User Question: "Who won the fifa world cup in 2018?"
+New Search Query: fifa world cup 2018 champion
+
+Now do the following:
+Failed Query: "${currentSearchQuery}"
+User Question: "${userQuery}"
+New Search Query:`;
+        const newQueryRes = await ollama.chat({
+          model: model,
+          messages: [{ role: "user", content: newQueryPrompt }],
+          stream: false,
+          think: false,
+        });
+        currentSearchQuery = newQueryRes.message.content
+          .replace(/["']/g, "")
+          .trim();
+        if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
       }
     }
 
@@ -683,10 +718,12 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
 
     let fullContent = "";
 
+    console.log(`Thinking: ${isThinking ? "Enabled" : "Disabled"}. Streaming response...`);
     const stream = await ollama.chat({
       model: model,
       messages: ollamaMessages,
       stream: true,
+      think: isThinking,
     });
 
     for await (const chunk of stream) {
@@ -694,6 +731,10 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
         fullContent += chunk.message.content;
         res.write(
           `data: ${JSON.stringify({ content: chunk.message.content })}\n\n`,
+        );
+      } else if (chunk.message.thinking) {
+        res.write(
+          `data: ${JSON.stringify({ thinking: chunk.message.thinking })}\n\n`,
         );
       }
     }

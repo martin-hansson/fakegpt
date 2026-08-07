@@ -13,6 +13,7 @@ type LoadingMessage = {
 type Message = {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  thinking?: string;
   sources?: any[];
   rewrittenQuery?: string;
 };
@@ -227,6 +228,15 @@ function App() {
                     return newM;
                   });
                 }
+                if (data.thinking) {
+                  setMessages(prev => {
+                    const newM = [...prev];
+                    const last = { ...newM[newM.length - 1] };
+                    last.thinking = (last.thinking || '') + data.thinking.replace(/\n \+/g, '\n');
+                    newM[newM.length - 1] = last;
+                    return newM;
+                  });
+                }
               } catch (e) {
                 // partial json or parse error, ignore
               }
@@ -359,6 +369,7 @@ function App() {
                 <div key={idx} className={`message-wrapper ${msg.role}`}>
                   <div className="message-content">
                     <div className="markdown-body">
+                      {msg.thinking && <ThinkingContent thinking={msg.thinking} hasStartedAnswer={!!msg.content} />}
                       <ReactMarkdown rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
                       {msg.sources && <SourcesDropdown sources={msg.sources} content={msg.content} rewrittenQuery={msg.rewrittenQuery} />}
                     </div>
@@ -412,6 +423,33 @@ function App() {
 }
 
 export default App;
+
+function ThinkingContent({ thinking, hasStartedAnswer }: { thinking: string; hasStartedAnswer: boolean }) {
+  const [isOpen, setIsOpen] = useState(!hasStartedAnswer);
+  const hadStartedRef = useRef(hasStartedAnswer);
+
+  useEffect(() => {
+    if (!hadStartedRef.current && hasStartedAnswer) {
+      setIsOpen(false);
+    }
+    hadStartedRef.current = hasStartedAnswer;
+  }, [hasStartedAnswer]);
+
+  return (
+    <div className={`thinking-wrapper ${isOpen ? 'open' : ''}`}>
+      <button className="thinking-pill" onClick={() => setIsOpen(!isOpen)}>
+        {isOpen ? 'Hide thinking' : 'Show thinking'}
+      </button>
+      <div className={`thinking-animator ${isOpen ? 'open' : ''}`}>
+        <div className="thinking-content-inner">
+          <div className="thinking-content">
+            <ReactMarkdown rehypePlugins={[rehypeRaw]}>{thinking}</ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[], content: string, rewrittenQuery?: string }) {
   const [isOpen, setIsOpen] = useState(false);

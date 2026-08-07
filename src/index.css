@@ -560,3 +560,56 @@ body, html {
     background-position: 50% center;
   }
 }
+
+.thinking-wrapper {
+  border-radius: 1.5rem;
+  display: block;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.thinking-wrapper.open {
+  border-radius: 1rem;
+}
+
+.thinking-pill {
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  background-color: transparent;
+  padding: 0.75rem 0rem;
+  border: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  outline: none;
+}
+
+.thinking-pill:hover {
+  color: white;
+}
+
+.thinking-animator {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.thinking-animator.open {
+  grid-template-rows: 1fr;
+}
+
+.thinking-content-inner {
+  overflow: hidden;
+}
+
+.thinking-animator.open .thinking-content-inner {
+  padding-bottom: 1rem;
+}
+
+.thinking-content {
+  font-style: italic;
+  color: var(--text-secondary);
+}
