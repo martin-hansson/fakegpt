@@ -326,7 +326,7 @@ Search query:`;
         model: model,
         messages: [{ role: "user", content: rewritePrompt }],
         stream: true,
-        think: isThinking,
+        think: false, // Smaller thinking models overthink too much
       });
 
       let rewritten= "";
@@ -341,6 +341,11 @@ Search query:`;
       }
 
       rewritten = rewritten.replace(/["']/g, "").trim();
+      if (rewritten.includes("</think>")) {
+        // Sometimes, the model ignores the instruction not to think, and does so anyways.
+        rewritten = rewritten.split("</think>")[1].trim();
+      }
+
       if (
         rewritten.toUpperCase() === "NO_SEARCH" ||
         rewritten.toUpperCase() === "IGNORE_SEARCH"
