@@ -4,6 +4,12 @@ import rehypeRaw from 'rehype-raw';
 import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2 } from 'lucide-react';
 import './index.css';
 
+type LoadingMessage = {
+  type: 'text' | 'url';
+  message?: string;
+  url?: string;
+};
+
 type Message = {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
@@ -32,6 +38,7 @@ function App() {
   const [isCrawling, setIsCrawling] = useState(false);
   const [crawlSuccess, setCrawlSuccess] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState<LoadingMessage>({ type: 'text', message: 'Processing...' });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fetchChats = async () => {
@@ -200,6 +207,15 @@ function App() {
                 // partial json or parse error, ignore
               }
             }
+          } else if (line.startsWith('event: ')) {
+            const eventStr = line.slice(7);
+            const event = JSON.parse(eventStr);
+
+            if (event.type === "message") {
+              setLoadingMessage({ type: "text", message: event.content || 'Processing...' });
+            } else if (event.type === "url") {
+              setLoadingMessage({ type: "url", url: event.content });
+            }
           }
         }
       }
@@ -333,6 +349,11 @@ function App() {
                   <div className="markdown-body">
                     <div className="loading-scroll">
                       <div className="loading-pulse"></div>
+                      {loadingMessage.type === 'text' ? (
+                        <span>{loadingMessage.message}</span>
+                      ) : (
+                        <span>Checking <a href={loadingMessage.url} target="_blank" rel="noopener noreferrer">{loadingMessage.url?.slice(0, 50)}</a>...</span>
+                      )}
                     </div>
                   </div>
                 </div>

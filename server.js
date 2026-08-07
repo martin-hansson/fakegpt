@@ -223,6 +223,10 @@ app.post("/api/chats/:id", async (req, res) => {
   const { id } = req.params;
   const { messages, targetUrl, model = "llama3.2:3b" } = req.body;
 
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: "Messages array is required" });
   }
@@ -301,6 +305,7 @@ Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
 Search query:`;
 
+      res.write(`event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`);
       const rewriteRes = await ollama.chat({
         model: model,
         messages: [{ role: "user", content: rewritePrompt }],
@@ -333,6 +338,7 @@ Search query:`;
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
       onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
 
+      res.write(`event: ${JSON.stringify({ type: "message", content: `Searching...` })}\n\n`);
       // Load local chunks
       for (const key of Object.keys(localCheck)) {
         if (localCheck[key].chunks) {
@@ -487,6 +493,7 @@ Search query:`;
           });
           let validUrls = [];
           for (const item of urlsToCrawl) {
+            res.write(`event: ${JSON.stringify({type: "url", content: item.url})}\n\n`);
             try {
               const origin = new URL(item.url).origin;
               const pathname = new URL(item.url).pathname;
@@ -557,6 +564,7 @@ Search query:`;
         }
 
         // Generate new query
+        res.write(`event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`);
         const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
 
 Example 1:
@@ -592,6 +600,8 @@ New Search Query:`;
       isLocal: c.isLocal,
       similarity: c.similarity || 0,
     }));
+
+    res.write(`event: ${JSON.stringify({ type: "message", content: `Generating response...` })}\n\n`);
 
     // Prepare Context for Final Generation
     const currentDateStr = new Date().toLocaleDateString("en-US", {
@@ -631,10 +641,6 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
       { role: "system", content: systemContent },
       ...messages.map((m) => ({ role: m.role, content: m.content })),
     ];
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
 
     let fullContent = "";
 
