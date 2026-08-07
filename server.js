@@ -431,8 +431,11 @@ Search query:`;
         .map((c, i) => `[[${i + 1}]] ${c.title || c.source}\n${c.chunk}`)
         .join("\n\n");
 
+      let hasOnlineSource = topK.some((c) => !c.isLocal);
+      let skipEval = attempts === 1 && topK.length > 0 && !hasOnlineSource;
+
       // Evaluate if context has answer
-      if (contextText.trim().length > 0) {
+      if (!skipEval && contextText.trim().length > 0) {
         const evalPrompt = `Context:\n${contextText}\n\nQuestion: "${userQuery}"\n\nDoes the context contain enough information to fully answer the question? Reply EXACTLY with 'YES' or 'NO'.`;
         const evalRes = await ollama.chat({
           model: model,
@@ -448,6 +451,8 @@ Search query:`;
           foundAnswer = true;
           break;
         }
+      } else if (skipEval) {
+        console.log(`Agent loop: Skipping evaluation on attempt 1 because topK only contains local sources. Forcing web search for competition.`);
       }
 
       if (attempts < maxAttempts) {
