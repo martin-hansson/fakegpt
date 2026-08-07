@@ -348,7 +348,7 @@ function App() {
                 <div className="message-content">
                   <div className="markdown-body">
                     <div className="loading-scroll">
-                      <div className="loading-pulse"></div>
+                      <span className="loading-pulse"></span>
                       {loadingMessage.type === 'text' ? (
                         <span className="loading-message">{loadingMessage.message}</span>
                       ) : (
