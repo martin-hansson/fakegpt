@@ -338,7 +338,7 @@ Search query:`;
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
       onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
 
-      res.write(`event: ${JSON.stringify({ type: "message", content: `Searching...` })}\n\n`);
+      res.write(`event: ${JSON.stringify({ type: "message", content: `Searching for "${searchQuery}"...` })}\n\n`);
       // Load local chunks
       for (const key of Object.keys(localCheck)) {
         if (localCheck[key].chunks) {
@@ -442,6 +442,7 @@ Search query:`;
         console.log(
           `Agent loop: Attempt ${attempts} failed. Searching web for: "${currentSearchQuery}"`,
         );
+        res.write(`event: ${JSON.stringify({ type: "message", content: `Searching  for "${currentSearchQuery}"...` })}\n\n`);
 
         // Add a small delay between retries to protect students from DuckDuckGo IP bans
         if (attempts > 1) {
