@@ -451,18 +451,42 @@ Search query:`;
       }
 
       if (attempts < maxAttempts) {
+        // Generate new query if we already tried once and the evaluation failed
+        if (attempts > 1) {
+          res.write(
+            `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
+          );
+          const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
+
+Example 1:
+Failed Query: "fifa winners"
+User Question: "Who won the fifa world cup in 2018?"
+New Search Query: fifa world cup 2018 champion
+
+Now do the following:
+Failed Query: "${currentSearchQuery}"
+User Question: "${userQuery}"
+New Search Query:`;
+          const newQueryRes = await ollama.chat({
+            model: model,
+            messages: [{ role: "user", content: newQueryPrompt }],
+            stream: false,
+          });
+          currentSearchQuery = newQueryRes.message.content
+            .replace(/["']/g, "")
+            .trim();
+          if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
+
+          console.log("Sleeping 2.5 seconds to avoid DDG rate limits...");
+          await new Promise((r) => setTimeout(r, 2500));
+        }
+
         console.log(
           `Agent loop: Attempt ${attempts} failed. Searching web for: "${currentSearchQuery}"`,
         );
         res.write(
           `event: ${JSON.stringify({ type: "message", content: `Searching  for "${currentSearchQuery}"...` })}\n\n`,
         );
-
-        // Add a small delay between retries to protect students from DuckDuckGo IP bans
-        if (attempts > 1) {
-          console.log("Sleeping 2.5 seconds to avoid DDG rate limits...");
-          await new Promise((r) => setTimeout(r, 2500));
-        }
 
         let webChunks = [];
         try {
@@ -580,30 +604,6 @@ Search query:`;
           await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
         }
 
-        // Generate new query
-        res.write(
-          `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
-        );
-        const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
-
-Example 1:
-Failed Query: "fifa winners"
-User Question: "Who won the fifa world cup in 2018?"
-New Search Query: fifa world cup 2018 champion
-
-Now do the following:
-Failed Query: "${currentSearchQuery}"
-User Question: "${userQuery}"
-New Search Query:`;
-        const newQueryRes = await ollama.chat({
-          model: model,
-          messages: [{ role: "user", content: newQueryPrompt }],
-          stream: false,
-        });
-        currentSearchQuery = newQueryRes.message.content
-          .replace(/["']/g, "")
-          .trim();
-        if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
       }
     }
 
