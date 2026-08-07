@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2 } from 'lucide-react';
+import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, X } from 'lucide-react';
 import './index.css';
 
 type LoadingMessage = {
@@ -41,6 +41,10 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState<LoadingMessage>({ type: 'text', message: 'Processing...' });
   const [userLocation, setUserLocation] = useState<string>('');
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [menuOpenForId, setMenuOpenForId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fetchChats = async () => {
@@ -94,10 +98,82 @@ function App() {
     }
   };
 
+  const lastGeneratedLengthRef = useRef<number>(0);
+
+  useEffect(() => {
+    lastGeneratedLengthRef.current = 0;
+  }, [currentChatId]);
+
   const createNewChat = () => {
     setCurrentChatId(generateId());
     setMessages([]);
   };
+
+  const generateTitle = async () => {
+    if (messages.length === 0) return;
+    if (messages.length === lastGeneratedLengthRef.current) return;
+    
+    lastGeneratedLengthRef.current = messages.length;
+    try {
+      await fetch(`/api/chats/${currentChatId}/title`, { method: 'POST' });
+      fetchChats();
+    } catch (e) {
+      console.error("Failed to generate title", e);
+      lastGeneratedLengthRef.current = 0;
+    }
+  };
+
+  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Trigger 1: Idle Time
+  useEffect(() => {
+    if (messages.length > 0 && !isLoading) {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        generateTitle();
+      }, 30000); // 30 seconds of inactivity
+    }
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [messages, isLoading, currentChatId]);
+
+  // Trigger 2: Visibility / Pauses
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && messages.length > 0 && !isLoading) {
+        generateTitle();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [messages, isLoading, currentChatId]);
+
+  // Close menu on outside click
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      if (menuOpenForId) setMenuOpenForId(null);
+    };
+    if (menuOpenForId) {
+      document.addEventListener('click', handleOutsideClick);
+    }
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [menuOpenForId]);
+
+  // Trigger 3 & 4: Turn 3 Rule and Length Milestones
+  useEffect(() => {
+    if (isLoading || messages.length === 0) return;
+    
+    // We only want to trigger this exactly when the condition is met, not repeatedly.
+    // However, since it only runs when `isLoading` becomes false, it effectively runs once per assistant response.
+    const userMessages = messages.filter(m => m.role === 'user');
+    
+    if (userMessages.length === 1 || userMessages.length === 3) {
+       generateTitle();
+    } else if (messages.length > 0 && messages.length % 10 === 0) {
+       generateTitle();
+    }
+  }, [messages.length, isLoading, currentChatId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -128,6 +204,33 @@ function App() {
       alert(`Error crawling site: ${e.message}`);
     } finally {
       setIsCrawling(false);
+    }
+  };
+
+  const handleRename = async (id: string, newTitle: string) => {
+    if (!newTitle.trim()) return;
+    try {
+      await fetch(`/api/chats/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle.trim() })
+      });
+      if (id === currentChatId) {
+        lastGeneratedLengthRef.current = messages.length;
+      }
+      fetchChats();
+    } catch (e) {
+      console.error("Rename error", e);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await fetch(`/api/chats/${id}`, { method: 'DELETE' });
+      if (currentChatId === id) createNewChat();
+      fetchChats();
+    } catch (e) {
+      console.error("Delete error", e);
     }
   };
 
@@ -295,7 +398,7 @@ function App() {
         </div>
 
         <button 
-          className="new-chat-btn"
+          className={`new-chat-btn ${messages.length === 0 ? 'active' : ''}`}
           onClick={createNewChat}
           title={!isSidebarOpen ? "New Chat" : ""}
         >
@@ -318,10 +421,66 @@ function App() {
                   className={`chat-history-item ${chat.id === currentChatId ? 'active' : ''}`}
                   onClick={() => loadChat(chat.id)}
                 >
-                  <span className="chat-title">{chat.title || 'New Chat'}</span>
+                  {editingChatId === chat.id ? (
+                    <input 
+                      type="text"
+                      className="chat-title-input"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onBlur={() => {
+                        setEditingChatId(null);
+                        handleRename(chat.id, editTitle);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                           setEditingChatId(null);
+                           handleRename(chat.id, editTitle);
+                        } else if (e.key === 'Escape') {
+                           setEditingChatId(null);
+                        }
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      autoFocus
+                    />
+                  ) : (
+                    <>
+                      <span className="chat-title">{chat.title || 'New Chat'}</span>
+                      <div className="chat-item-menu" onClick={(e) => e.stopPropagation()}>
+                        <button className="menu-trigger" onClick={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setMenuPos({ top: rect.bottom, left: rect.left });
+                          setMenuOpenForId(menuOpenForId === chat.id ? null : chat.id);
+                        }}>
+                          <MoreHorizontal size={14} />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
+
+            {menuOpenForId && (() => {
+              const activeChat = chatList.find(c => c.id === menuOpenForId);
+              if (!activeChat) return null;
+              return (
+                <div className="chat-dropdown" style={{ top: menuPos.top, left: menuPos.left }}>
+                  <button onClick={() => {
+                    setEditingChatId(activeChat.id);
+                    setEditTitle(activeChat.title || 'New Chat');
+                    setMenuOpenForId(null);
+                  }}>
+                    <Edit2 size={12} /> Rename
+                  </button>
+                  <button onClick={() => {
+                    handleDelete(activeChat.id);
+                    setMenuOpenForId(null);
+                  }} className="delete-opt">
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+              );
+            })()}
 
             <div className="geo-settings">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
@@ -365,6 +524,7 @@ function App() {
           <div className="messages-area">
             {messages.map((msg, idx) => {
               if (msg.role === 'system' || msg.role === 'tool') return null;
+              if (isLoading && idx === messages.length - 1 && msg.role === 'assistant' && msg.content === '') return null;
               return (
                 <div key={idx} className={`message-wrapper ${msg.role}`}>
                   <div className="message-content">
@@ -416,6 +576,16 @@ function App() {
               <ArrowUp size={16} />
             </button>
           </div>
+          <p style={{ 
+            position: 'absolute',
+            bottom: '0.5rem',
+            fontSize: '0.75rem', 
+            color: 'white', 
+            textAlign: 'center', 
+            opacity: 0.5 
+          }}>
+            FakeGPT is a small LLM and will likely make mistakes. Always remember to verify its responses.
+          </p>
         </div>
       </div>
     </>
@@ -473,11 +643,11 @@ function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[],
           ) : (
             sources.map((c, idx) => {
               let statusBadge = '';
-              if (idx < 5) {
-                const isCited = content.includes(`[${idx + 1}]`) || content.includes(c.source);
-                statusBadge = isCited ? '<span style="color: #3fb950;">Cited</span>' : '<span style="color: var(--text-secondary);">Read by LLM (Not Cited)</span>';
+              if (c.isRelevant === false) {
+                statusBadge = '<span style="color: #f85149;">Rejected by Evaluator LLM</span>';
               } else {
-                statusBadge = '<span style="color: #f85149;">Excluded (Best Local Chunk)</span>';
+                const isCited = content.includes(c.source);
+                statusBadge = isCited ? '<span style="color: #3fb950;">Cited</span>' : '<span style="color: var(--text-secondary);">Read by LLM (Not Cited)</span>';
               }
               
               return (

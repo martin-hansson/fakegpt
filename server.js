@@ -36,7 +36,8 @@ if (!fsSync.existsSync(DATA_DIR)) {
 
 const ollama = new Ollama({ host: "http://localhost:11434" });
 
-const isThinking = await ollama.show({ model: GEN_MODEL })
+const isThinking = await ollama
+  .show({ model: GEN_MODEL })
   .then((res) => res.capabilities?.includes("thinking") || false);
 
 // Serve the compiled Vite static assets
@@ -224,7 +225,12 @@ app.get("/api/chats/:id", async (req, res) => {
 
 app.post("/api/chats/:id", async (req, res) => {
   const { id } = req.params;
-  const { messages, targetUrl, userLocation, model = GEN_MODEL } = req.body;
+  const {
+    messages,
+    targetUrl,
+    userLocation,
+    model = GEN_MODEL,
+  } = req.body || {};
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -282,12 +288,15 @@ app.post("/api/chats/:id", async (req, res) => {
         day: "numeric",
       });
       const currentYear = new Date().getFullYear();
-      let locationContext = userLocation ? ` The user's current location is ${userLocation}.` : "";
+      let locationContext = userLocation
+        ? ` The user's current location is ${userLocation}.`
+        : "";
       const rewritePrompt = `Rewrite the user's query into a concise search engine query, using the chat history to resolve context if needed. Output ONLY the search query. Today's date is ${currentDate}.${locationContext}
-CRITICAL RULE 1: If the user asks about a recurring event or current status without specifying a time frame (e.g., "who won the superbowl", "who is the president"), you MUST append the current year (${currentYear}) to the search query so it retrieves the latest information.
-CRITICAL RULE 2: If the user is just saying hello, asking about your capabilities (e.g., "what can you do?", "who are you?"), or making general conversation that doesn't require looking up facts, you MUST output exactly: NO_SEARCH
-CRITICAL RULE 3: ONLY use the chat history to resolve context if the user's query contains pronouns (it, they, he, she) or explicitly refers to the previous topic. If it is a completely new topic or a general question (e.g., "what's the news", "what is happening in the world"), DO NOT use the chat history. Treat it as a standalone query.
-CRITICAL RULE 4: If the user asks for local places, weather, or recommendations (e.g., "wine bars", "restaurants near me") without specifying a location, you MUST append their current location to the search query if it is known. However, if the user explicitly specifies a different location (e.g., "wine bars in Berlin"), use their specified location instead and DO NOT append their current location.
+CRITICAL RULE 1: For queries about recurring events or current status (e.g., "who won the superbowl"), you MUST append the current year (${currentYear}).
+CRITICAL RULE 2: For queries about NEWS, CURRENT EVENTS, or fast-changing topics (e.g., "what's the news", "local news"), you MUST append the FULL CURRENT DATE (${currentDate}). This applies to BOTH global and local news.
+CRITICAL RULE 3: If the user asks for local places, weather, news, or recommendations (e.g., "wine bars", "local news") without specifying a location, you MUST append their current location to the query if it is known. (For local news, you must append BOTH the location and the full date). If they specify a location (e.g., "news in Berlin"), use that instead.
+CRITICAL RULE 4: If the user is just saying hello or asking about capabilities, output exactly: NO_SEARCH. NOTE: "whats happening right now" is asking for news, so DO NOT output NO_SEARCH.
+CRITICAL RULE 5: ONLY use the chat history to resolve context if the user's query explicitly refers to the previous topic or contains pronouns.
 
 Example 1:
 User's latest query: "who won the superbowl?"
@@ -302,18 +311,29 @@ User's latest query: "what can you do?"
 Search query: NO_SEARCH
 
 Example 4:
+User's latest query: "Give me a news brief"
+Search query: latest news summary ${currentDate}
+
+Example 5:
+Chat history:
+User: Give me a news brief
+Assistant: Here is the news...
+User's latest query: "what about local news?"
+Search query: local news in ${userLocation || "Stockholm, Sweden"} ${currentDate}
+
+Example 6:
 Chat history:
 User: who won the superbowl?
 Assistant: The Seattle Seahawks won Super Bowl LX.
 User's latest query: "what about the previous years?"
 Search query: superbowl winners before ${currentYear}
 
-Example 5:
+Example 7:
 Chat history:
 User: who are you?
 Assistant: I am FakeGPT...
 User's latest query: "Whats happening in the world?"
-Search query: latest world news ${currentYear}
+Search query: latest world news ${currentDate}
 
 Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
@@ -329,7 +349,7 @@ Search query:`;
         think: false, // Smaller thinking models overthink too much
       });
 
-      let rewritten= "";
+      let rewritten = "";
       for await (const chunk of rewriteRes) {
         if (chunk.message.thinking) {
           res.write(
@@ -411,6 +431,7 @@ Search query:`;
     let queriesAttempted = requiresSearch && searchQuery ? [searchQuery] : [];
     let selectedChunks = [];
     let topK = [];
+    let finalRelevantIndices = null;
 
     // Memory cleanup for long sessions
     let queryCounter = global.queryCounter || 0;
@@ -458,11 +479,25 @@ Search query:`;
       let skipEval = attempts === 1 && topK.length > 0 && !hasOnlineSource;
 
       // Evaluate if context has answer
-        res.write(
-          `event: ${JSON.stringify({ type: "message", content: `Evaluating search results...` })}\n\n`,
-        );
-        if (!skipEval && contextText.trim().length > 0) {
-        const evalPrompt = `Context:\n${contextText}\n\nQuestion: "${userQuery}"\n\nDoes the context contain enough information to fully answer the question? Reply EXACTLY with 'YES' or 'NO'.`;
+      res.write(
+        `event: ${JSON.stringify({ type: "message", content: `Evaluating search results...` })}\n\n`,
+      );
+      if (!skipEval && contextText.trim().length > 0) {
+        const evalPrompt = `You are a strict relevance evaluator.
+Context:
+${contextText}
+
+Question: "${currentSearchQuery}"
+(Original User Input: "${userQuery}")
+
+Determine if the Context contains relevant information that helps address the Question.
+CRITICAL RULES FOR EVALUATION:
+1. If the Question asks for news in a specific location (e.g. "Stockholm, Sweden"), you MUST verify that the text inside the source explicitly mentions that location or news happening in that location. If it does not, you MUST NOT include its number in your 'YES' response. If NONE of the sources mention the requested location, you MUST output exactly 'NO'.
+2. If the Question asks for a general news brief WITHOUT a specific location, ALL valid news articles and summaries are highly relevant and must be accepted.
+
+Make sure to read the ENTIRE chunk for each source, as crawled snippets often start with web metadata or navigation links but contain the actual relevant content later in the text.
+If NO sources are relevant, reply EXACTLY with 'NO'.
+If ANY sources are relevant, reply 'YES' followed by a comma-separated list of the specific source numbers (e.g. YES: 1, 3) that are ACTUALLY relevant to the question. Do not include completely irrelevant sources (e.g. a restaurant ad when asking for news, or global news when asking for local news).`;
         const evalRes = await ollama.chat({
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
@@ -473,13 +508,35 @@ Search query:`;
 
         if (evalText.includes("YES")) {
           console.log(
-            `Agent loop: Cache/Index contained answer on attempt ${attempts}.`,
+            `Agent loop: Cache/Index contained answer on attempt ${attempts}. (${evalText})`,
           );
+
+          // Identify relevant sources, but don't mutate topK yet so frontend sees all evaluated sources
+          const relevantIndices = [];
+          const matches = evalText.match(/\d+/g);
+          if (matches) {
+            for (const m of matches) {
+              const idx = parseInt(m, 10) - 1;
+              if (idx >= 0 && idx < topK.length) {
+                relevantIndices.push(idx);
+              }
+            }
+          }
+
+          if (relevantIndices.length > 0) {
+            finalRelevantIndices = relevantIndices;
+          } else {
+            // Fallback if parsing failed but it was YES
+            finalRelevantIndices = [0];
+          }
+
           foundAnswer = true;
           break;
         }
       } else if (skipEval) {
-        console.log(`Agent loop: Skipping evaluation on attempt 1 because topK only contains local sources. Forcing web search for competition.`);
+        console.log(
+          `Agent loop: Skipping evaluation on attempt 1 because topK only contains local sources. Forcing web search for competition.`,
+        );
       }
 
       if (attempts < maxAttempts) {
@@ -488,7 +545,10 @@ Search query:`;
           res.write(
             `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
           );
-          const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
+          let locationHint = userLocation
+            ? ` If the user is asking for local information, make sure to include their location (${userLocation}) in the new search query.`
+            : "";
+          const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.${locationHint}
 
 Example 1:
 Failed Query: "fifa winners"
@@ -636,46 +696,46 @@ New Search Query:`;
           }
           await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
         }
-
-        // Generate new query
-        res.write(
-          `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
-        );
-        const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.
-
-Example 1:
-Failed Query: "fifa winners"
-User Question: "Who won the fifa world cup in 2018?"
-New Search Query: fifa world cup 2018 champion
-
-Now do the following:
-Failed Query: "${currentSearchQuery}"
-User Question: "${userQuery}"
-New Search Query:`;
-        const newQueryRes = await ollama.chat({
-          model: model,
-          messages: [{ role: "user", content: newQueryPrompt }],
-          stream: false,
-          think: false,
-        });
-        currentSearchQuery = newQueryRes.message.content
-          .replace(/["']/g, "")
-          .trim();
-        if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
       }
     }
 
     // Extract top 5 for LLM
     let localChunks = combinedIndices.filter((c) => c.isLocal);
     let bestLocal = localChunks.length > 0 ? localChunks[0] : null;
-    if (bestLocal && !topK.includes(bestLocal)) topK.push(bestLocal);
 
-    selectedChunks = topK.slice(0, 5);
-    topK = topK.map((c) => ({
+    // Only push the best local chunk if we haven't filtered it out during eval, but wait, the eval should have filtered it if it was irrelevant.
+    // So we don't automatically append it anymore if it wasn't relevant.
+
+    if (requiresSearch && foundAnswer) {
+      if (finalRelevantIndices) {
+        selectedChunks = finalRelevantIndices.map((i) => ({
+          ...topK[i],
+          originalIndex: i,
+        }));
+      } else {
+        selectedChunks = topK
+          .slice(0, 5)
+          .map((c, i) => ({ ...c, originalIndex: i }));
+      }
+    } else if (requiresSearch && !foundAnswer) {
+      selectedChunks = [
+        {
+          source: "Search System",
+          title: "Search Results",
+          chunk: "No relevant information was found for this query.",
+          originalIndex: 0,
+        },
+      ];
+    }
+    // We explicitly DO NOT clear or mutate topK here, so the frontend UI can still display all evaluated sources (both accepted and rejected).
+    topK = topK.map((c, i) => ({
       chunk: c.chunk,
       source: c.source,
       isLocal: c.isLocal,
       similarity: c.similarity || 0,
+      isRelevant: finalRelevantIndices
+        ? finalRelevantIndices.includes(i)
+        : false,
     }));
 
     res.write(
@@ -688,7 +748,9 @@ New Search Query:`;
       month: "long",
       day: "numeric",
     });
-    let finalLocationContext = userLocation ? ` The user's current location is ${userLocation}.` : "";
+    let finalLocationContext = userLocation
+      ? ` The user's current location is ${userLocation}.`
+      : "";
     let systemContent = `You are FakeGPT, a highly descriptive, friendly, and engaging AI chatbot. Your knowledge cutoff is December 2023, but you are equipped with powerful agentic tools to overcome this! Today's date is ${currentDateStr}.${finalLocationContext}
 
 YOUR CAPABILITIES:
@@ -699,12 +761,15 @@ If the user asks what you can do, proudly describe these capabilities!
 You have been provided with 'Context' retrieved from your search engine. 
 CRITICAL RULE: For any factual question, you MUST base your answer SOLELY on the provided Context. DO NOT use your internal general knowledge to answer factual questions. If the provided Context does not contain the answer, you must state that you couldn't find the information in the current search results.
 DO NOT say "Based on the context" or "In the text you shared". Just answer naturally as if you found it online.
+When asked for news briefs or summaries, be highly comprehensive and provide detailed information extracted from the sources.
 
 CRITICAL: At the end of EVERY response, ask a friendly follow-up question to keep the conversation engaging.`;
     if (selectedChunks.length > 0) {
       let contextText = "";
-      selectedChunks.forEach((c, idx) => {
-        let header = `SOURCE [[${idx + 1}]] URL: ${c.source}`;
+      selectedChunks.forEach((c) => {
+        let displayIdx =
+          c.originalIndex !== undefined ? c.originalIndex + 1 : 1;
+        let header = `SOURCE [[${displayIdx}]] URL: ${c.source}`;
         if (c.title) header += ` TITLE: ${c.title}`;
         contextText += `${header}\n${c.chunk}\n\n`;
       });
@@ -714,7 +779,8 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
 3. The citation MUST be a markdown link using the SOURCE number and URL provided above. Do NOT write the website name.
 4. If a sentence uses information from multiple sources, cite them all: [[1]](URL) [[2]](URL).
 5. Do NOT generate a reference list at the end of your response. ONLY use inline citations.
-6. If the provided Context does not contain the answer, you MUST say 'I cannot find the answer in the current search results' instead of using your own knowledge.`;
+6. Do NOT invent citations to URLs or sources that are not explicitly provided in the Context above.
+7. If the provided Context does not contain the answer, you MUST say 'I cannot find the answer in the current search results' instead of using your own knowledge.`;
     }
 
     const ollamaMessages = [
@@ -734,7 +800,9 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
 
     let fullContent = "";
 
-    console.log(`Thinking: ${isThinking ? "Enabled" : "Disabled"}. Streaming response...`);
+    console.log(
+      `Thinking: ${isThinking ? "Enabled" : "Disabled"}. Streaming response...`,
+    );
     const stream = await ollama.chat({
       model: model,
       messages: ollamaMessages,
@@ -791,6 +859,73 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
       res.end();
     }
+  }
+});
+
+app.post("/api/chats/:id/title", async (req, res) => {
+  const { id } = req.params;
+  const model = req.body?.model || GEN_MODEL;
+  try {
+    let chats = await readJsonFile(CHATS_FILE);
+    let chatIndex = chats.findIndex((c) => c.id === id);
+    if (chatIndex === -1)
+      return res.status(404).json({ error: "Chat not found" });
+
+    const chat = chats[chatIndex];
+    if (chat.messages.length === 0) return res.json({ title: chat.title });
+
+    // Use recent messages (up to 6) for context
+    const recentMessages = chat.messages
+      .slice(-6)
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+    const titlePrompt = `Generate a very brief, concise title (max 5 words) for this conversation based on this recent exchange:\n\n${recentMessages}\n\nTitle:`;
+
+    const titleRes = await ollama.chat({
+      model: model,
+      messages: [{ role: "user", content: titlePrompt }],
+      stream: false,
+    });
+
+    chat.title = titleRes.message.content.replace(/["*]/g, "").trim();
+    chat.updatedAt = new Date().toISOString();
+    chats[chatIndex] = chat;
+    await writeJsonFile(CHATS_FILE, chats);
+
+    res.json({ success: true, title: chat.title });
+  } catch (error) {
+    console.error("Title generation error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/chats/:id", async (req, res) => {
+  const { id } = req.params;
+  const { title } = req.body;
+  try {
+    let chats = await readJsonFile(CHATS_FILE);
+    let chatIndex = chats.findIndex((c) => c.id === id);
+    if (chatIndex === -1)
+      return res.status(404).json({ error: "Chat not found" });
+
+    if (title) chats[chatIndex].title = title;
+    chats[chatIndex].updatedAt = new Date().toISOString();
+    await writeJsonFile(CHATS_FILE, chats);
+    res.json({ success: true, chat: chats[chatIndex] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/chats/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    let chats = await readJsonFile(CHATS_FILE);
+    chats = chats.filter((c) => c.id !== id);
+    await writeJsonFile(CHATS_FILE, chats);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
