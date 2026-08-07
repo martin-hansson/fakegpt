@@ -14,7 +14,7 @@ You must have Node.js (version 18 or higher) installed.
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
   nvm install 20
   ```
-
+  
 ### 2. Install Ollama (Local AI Engine)
 This lab uses local LLMs to process data securely and for free.
 - **Mac:** Download the Mac installer from [Ollama's website](https://ollama.com/).
@@ -32,7 +32,7 @@ Once Ollama is installed and running, open your terminal (or Command Prompt) and
 ollama pull llama3.2:3b
 
 # 2. Download the vector embedding model (Gemma)
-ollama pull embeddinggemma
+ollama pull nomic-embed-text
 ```
 
 *(Note: Depending on your internet connection, downloading the models may take a few minutes as they are several gigabytes in size).*
@@ -53,6 +53,10 @@ Once all prerequisites are installed, you can start the lab application.
    npm run dev
    ```
 4. **Open your browser** and navigate to the URL provided in the terminal (usually `http://localhost:5173`).
+
+> [!NOTE]
+> **Windows users:** in case `npm` doesn't work, try running the following command:
+> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ---
 
