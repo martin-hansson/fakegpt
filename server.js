@@ -221,7 +221,7 @@ app.get("/api/chats/:id", async (req, res) => {
 
 app.post("/api/chats/:id", async (req, res) => {
   const { id } = req.params;
-  const { messages, targetUrl, model = GEN_MODEL } = req.body;
+  const { messages, targetUrl, userLocation, model = "llama3.2:3b" } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -278,10 +278,12 @@ app.post("/api/chats/:id", async (req, res) => {
         day: "numeric",
       });
       const currentYear = new Date().getFullYear();
-      const rewritePrompt = `Rewrite the user's query into a concise search engine query, using the chat history to resolve context if needed. Output ONLY the search query. Today's date is ${currentDate}.
+      let locationContext = userLocation ? ` The user's current location is ${userLocation}.` : "";
+      const rewritePrompt = `Rewrite the user's query into a concise search engine query, using the chat history to resolve context if needed. Output ONLY the search query. Today's date is ${currentDate}.${locationContext}
 CRITICAL RULE 1: If the user asks about a recurring event or current status without specifying a time frame (e.g., "who won the superbowl", "who is the president"), you MUST append the current year (${currentYear}) to the search query so it retrieves the latest information.
 CRITICAL RULE 2: If the user is just saying hello, asking about your capabilities (e.g., "what can you do?", "who are you?"), or making general conversation that doesn't require looking up facts, you MUST output exactly: NO_SEARCH
 CRITICAL RULE 3: ONLY use the chat history to resolve context if the user's query contains pronouns (it, they, he, she) or explicitly refers to the previous topic. If it is a completely new topic or a general question (e.g., "what's the news", "what is happening in the world"), DO NOT use the chat history. Treat it as a standalone query.
+CRITICAL RULE 4: If the user asks for local places, weather, or recommendations (e.g., "wine bars", "restaurants near me") without specifying a location, you MUST append their current location to the search query if it is known. However, if the user explicitly specifies a different location (e.g., "wine bars in Berlin"), use their specified location instead and DO NOT append their current location.
 
 Example 1:
 User's latest query: "who won the superbowl?"
@@ -635,7 +637,8 @@ New Search Query:`;
       month: "long",
       day: "numeric",
     });
-    let systemContent = `You are FakeGPT, a highly descriptive, friendly, and engaging AI chatbot. Your knowledge cutoff is December 2023, but you are equipped with powerful agentic tools to overcome this! Today's date is ${currentDateStr}.
+    let finalLocationContext = userLocation ? ` The user's current location is ${userLocation}.` : "";
+    let systemContent = `You are FakeGPT, a highly descriptive, friendly, and engaging AI chatbot. Your knowledge cutoff is December 2023, but you are equipped with powerful agentic tools to overcome this! Today's date is ${currentDateStr}.${finalLocationContext}
 
 YOUR CAPABILITIES:
 - You have an autonomous Agentic Search Loop that can query a real-time web search engine to find up-to-date information.

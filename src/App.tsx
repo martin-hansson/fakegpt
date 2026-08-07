@@ -39,6 +39,7 @@ function App() {
   const [crawlSuccess, setCrawlSuccess] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState<LoadingMessage>({ type: 'text', message: 'Processing...' });
+  const [userLocation, setUserLocation] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fetchChats = async () => {
@@ -55,6 +56,28 @@ function App() {
 
   useEffect(() => {
     fetchChats();
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.coords.latitude}&lon=${position.coords.longitude}`);
+            const data = await res.json();
+            const city = data.address.city || data.address.town || data.address.village || data.address.state;
+            const country = data.address.country;
+            if (city && country) {
+              setUserLocation(`${city}, ${country}`);
+            } else {
+              setUserLocation(`${position.coords.latitude}, ${position.coords.longitude}`);
+            }
+          } catch (e) {
+            setUserLocation(`${position.coords.latitude}, ${position.coords.longitude}`);
+          }
+        },
+        (error) => {
+          console.error("Error getting location: ", error);
+        }
+      );
+    }
   }, []);
 
   const loadChat = async (id: string) => {
@@ -154,7 +177,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: chatHistory,
-          targetUrl: targetUrl.trim() || undefined
+          targetUrl: targetUrl.trim() || undefined,
+          userLocation: userLocation || undefined
         }),
       });
 
