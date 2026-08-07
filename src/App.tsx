@@ -350,9 +350,9 @@ function App() {
                     <div className="loading-scroll">
                       <div className="loading-pulse"></div>
                       {loadingMessage.type === 'text' ? (
-                        <span>{loadingMessage.message}</span>
+                        <span className="loading-message">{loadingMessage.message}</span>
                       ) : (
-                        <span>Checking <a href={loadingMessage.url} target="_blank" rel="noopener noreferrer">{loadingMessage.url?.slice(0, 50)}</a>...</span>
+                        <span className="loading-message">Checking <a className="loading-message-link" href={loadingMessage.url} target="_blank" rel="noopener noreferrer">{loadingMessage.url?.slice(0, 50)}</a>...</span>
                       )}
                     </div>
                   </div>
