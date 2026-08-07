@@ -299,7 +299,7 @@ Chat history:
 User: who won the superbowl?
 Assistant: The Seattle Seahawks won Super Bowl LX.
 User's latest query: "what about the previous years?"
-Search query: superbowl winners previous years
+Search query: superbowl winners before ${currentYear}
 
 Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
