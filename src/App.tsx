@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, X } from 'lucide-react';
+import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2 } from 'lucide-react';
 import './index.css';
 
 type LoadingMessage = {
@@ -123,7 +123,7 @@ function App() {
     }
   };
 
-  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Trigger 1: Idle Time
   useEffect(() => {

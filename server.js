@@ -81,11 +81,37 @@ async function initDataStorage() {
 }
 initDataStorage();
 
+function normalizeQueryKey(q) {
+  if (!q) return "";
+  return q.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeSiteUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    let p = u.pathname;
+    if (p.endsWith("/") && p.length > 1) {
+      p = p.slice(0, -1);
+    }
+    return `${u.protocol}//${u.host}${p === "/" ? "" : p}`;
+  } catch (e) {
+    return rawUrl.trim().replace(/\/+$/, "");
+  }
+}
+
 // Read/Write Helpers
 async function readJsonFile(filepath) {
   try {
     const data = await fs.readFile(filepath, "utf-8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (filepath === ONLINE_CACHE_FILE && parsed && typeof parsed === "object") {
+      // Migrate legacy cache where keys were URLs rather than search queries
+      const firstKey = Object.keys(parsed)[0];
+      if (firstKey && (firstKey.startsWith("http://") || firstKey.startsWith("https://"))) {
+        return {};
+      }
+    }
+    return parsed;
   } catch (e) {
     return filepath === CHATS_FILE ? [] : {};
   }
@@ -192,8 +218,14 @@ app.post("/api/crawl", async (req, res) => {
       }
     }
 
+    const normKey = normalizeSiteUrl(url);
     const index = await readJsonFile(LOCAL_INDEX_FILE);
-    index[url] = {
+    for (const existingKey of Object.keys(index)) {
+      if (normalizeSiteUrl(existingKey) === normKey) {
+        delete index[existingKey];
+      }
+    }
+    index[normKey] = {
       crawledAt: new Date().toISOString(),
       chunks: embeddedChunks,
     };
@@ -387,6 +419,7 @@ Search query:`;
     // 1. Agentic Search Loop
     let combinedIndices = [];
     let onlineCache = {};
+    let localChunks = [];
     if (requiresSearch) {
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
       onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
@@ -415,12 +448,8 @@ Search query:`;
               isLocal: true,
             };
           });
-          combinedIndices = combinedIndices.concat(local);
+          localChunks = localChunks.concat(local);
         }
-      }
-      // Load online cache
-      for (const key of Object.keys(onlineCache)) {
-        combinedIndices.push(onlineCache[key]);
       }
     }
 
@@ -433,22 +462,13 @@ Search query:`;
     let topK = [];
     let finalRelevantIndices = null;
 
-    // Memory cleanup for long sessions
-    let queryCounter = global.queryCounter || 0;
-    queryCounter++;
-    global.queryCounter = queryCounter;
-    if (queryCounter > 5) {
-      console.log("Clearing online cache to save memory...");
-      for (const key of Object.keys(onlineCache)) delete onlineCache[key];
-      global.queryCounter = 0;
-      try {
-        await fs.rm("storage", { recursive: true, force: true });
-      } catch (e) {}
-      await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
-    }
-
     while (attempts < maxAttempts && !foundAnswer) {
       attempts++;
+      const currentQueryKey = normalizeQueryKey(currentSearchQuery || userQuery);
+      const cachedCompetitors = Array.isArray(onlineCache[currentQueryKey])
+        ? onlineCache[currentQueryKey]
+        : [];
+      combinedIndices = [...localChunks, ...cachedCompetitors];
       let qEmbed = null;
       try {
         qEmbed = await ollama.embeddings({
@@ -574,105 +594,110 @@ New Search Query:`;
           await new Promise((r) => setTimeout(r, 2500));
         }
 
-        console.log(
-          `Agent loop: Attempt ${attempts} failed. Searching web for: "${currentSearchQuery}"`,
-        );
-        res.write(
-          `event: ${JSON.stringify({ type: "message", content: `Searching  for "${currentSearchQuery}"...` })}\n\n`,
-        );
-
-        let webChunks = [];
-        try {
-          const searchResp = await fetch(
-            `https://html.duckduckgo.com/html/?q=${encodeURIComponent(currentSearchQuery)}`,
-            { headers: { "User-Agent": "Mozilla/5.0" } },
+        const newQueryKey = normalizeQueryKey(currentSearchQuery || userQuery);
+        if (!onlineCache[newQueryKey]) {
+          console.log(
+            `Agent loop: Searching web for competitors on query: "${currentSearchQuery}"`,
           );
-          const html = await searchResp.text();
-          const $ = cheerio.load(html);
-          $(".result").each((i, el) => {
-            if (i < 5) {
-              const snippet = $(el).find(".result__snippet").text().trim();
-              const title = $(el).find(".result__a").text().trim();
-              let link = $(el).find(".result__a").attr("href");
-              if (link && link.includes("uddg="))
-                link = decodeURIComponent(link.split("uddg=")[1].split("&")[0]);
-              if (snippet)
-                webChunks.push({
-                  text: snippet,
-                  url: link || "Web Search",
-                  title: title,
-                  rank: i + 1,
-                });
-            }
-          });
-        } catch (e) {}
+          res.write(
+            `event: ${JSON.stringify({ type: "message", content: `Searching web for "${currentSearchQuery}"...` })}\n\n`,
+          );
 
-        let urlsToCrawl = webChunks.filter((w) => !onlineCache[w.url]);
-        if (urlsToCrawl.length > 0) {
-          let crawledContent = {};
-          const crawler = new CheerioCrawler({
-            maxRequestsPerCrawl: 5,
-            maxRequestRetries: 0,
-            maxConcurrency: 1, // Crawl 1 page at a time to avoid Cloudflare/WAF IP blocks
-            async requestHandler({ request, $ }) {
-              $("script, style, nav, footer, header").remove();
-              crawledContent[request.url] = $("body")
-                .text()
-                .replace(/\s+/g, " ")
-                .trim()
-                .substring(0, 1500);
-            },
-          });
-          let validUrls = [];
-          for (const item of urlsToCrawl) {
-            res.write(
-              `event: ${JSON.stringify({ type: "url", content: item.url })}\n\n`,
+          let webChunks = [];
+          try {
+            const searchResp = await fetch(
+              `https://html.duckduckgo.com/html/?q=${encodeURIComponent(currentSearchQuery)}`,
+              { headers: { "User-Agent": "Mozilla/5.0" } },
             );
-            try {
-              const origin = new URL(item.url).origin;
-              const pathname = new URL(item.url).pathname;
-              const robText = await (
-                await fetch(`${origin}/robots.txt`, {
-                  signal: AbortSignal.timeout(2000),
-                })
-              ).text();
+            const html = await searchResp.text();
+            const $ = cheerio.load(html);
+            $(".result").each((i, el) => {
+              if (i < 5) {
+                const snippet = $(el).find(".result__snippet").text().trim();
+                const title = $(el).find(".result__a").text().trim();
+                let link = $(el).find(".result__a").attr("href");
+                if (link && link.includes("uddg="))
+                  link = decodeURIComponent(link.split("uddg=")[1].split("&")[0]);
+                if (snippet)
+                  webChunks.push({
+                    text: snippet,
+                    url: link || "Web Search",
+                    title: title,
+                    rank: i + 1,
+                  });
+              }
+            });
+          } catch (e) {
+            console.error("DuckDuckGo search failed:", e.message);
+          }
 
-              let allowed = true;
-              let userAgentAll = false;
-              for (const line of robText.toLowerCase().split("\n")) {
-                const trimLine = line.trim();
-                if (trimLine.startsWith("user-agent: *")) userAgentAll = true;
-                else if (trimLine.startsWith("user-agent:"))
-                  userAgentAll = false;
-                else if (userAgentAll && trimLine.startsWith("disallow:")) {
-                  const disallowPath = trimLine.split(":")[1].trim();
-                  if (
-                    disallowPath === "/" ||
-                    (disallowPath.length > 1 &&
-                      pathname.startsWith(disallowPath))
-                  ) {
-                    allowed = false;
-                    break;
+          let crawledContent = {};
+          if (webChunks.length > 0) {
+            const crawler = new CheerioCrawler({
+              maxRequestsPerCrawl: 5,
+              maxRequestRetries: 0,
+              maxConcurrency: 1, // Crawl 1 page at a time to avoid Cloudflare/WAF IP blocks
+              async requestHandler({ request, $ }) {
+                $("script, style, nav, footer, header").remove();
+                crawledContent[request.url] = $("body")
+                  .text()
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .substring(0, 1500);
+              },
+            });
+            let validUrls = [];
+            for (const item of webChunks) {
+              res.write(
+                `event: ${JSON.stringify({ type: "url", content: item.url })}\n\n`,
+              );
+              try {
+                const origin = new URL(item.url).origin;
+                const pathname = new URL(item.url).pathname;
+                const robText = await (
+                  await fetch(`${origin}/robots.txt`, {
+                    signal: AbortSignal.timeout(2000),
+                  })
+                ).text();
+
+                let allowed = true;
+                let userAgentAll = false;
+                for (const line of robText.toLowerCase().split("\n")) {
+                  const trimLine = line.trim();
+                  if (trimLine.startsWith("user-agent: *")) userAgentAll = true;
+                  else if (trimLine.startsWith("user-agent:"))
+                    userAgentAll = false;
+                  else if (userAgentAll && trimLine.startsWith("disallow:")) {
+                    const disallowPath = trimLine.split(":")[1].trim();
+                    if (
+                      disallowPath === "/" ||
+                      (disallowPath.length > 1 &&
+                        pathname.startsWith(disallowPath))
+                    ) {
+                      allowed = false;
+                      break;
+                    }
                   }
                 }
-              }
 
-              if (allowed) {
+                if (allowed) {
+                  validUrls.push(item.url);
+                } else {
+                  console.log(`Robots disallowed: ${item.url}`);
+                }
+              } catch (_) {
                 validUrls.push(item.url);
-              } else {
-                console.log(`Robots disallowed: ${item.url}`);
               }
-            } catch (e) {
-              validUrls.push(item.url);
+            }
+            if (validUrls.length > 0) {
+              try {
+                await crawler.run(validUrls);
+              } catch (_) {}
             }
           }
-          if (validUrls.length > 0) {
-            try {
-              await crawler.run(validUrls);
-            } catch (e) {}
-          }
 
-          for (const item of urlsToCrawl) {
+          const newOnlineChunks = [];
+          for (const item of webChunks) {
             let textToEmbed =
               crawledContent[item.url] && crawledContent[item.url].length > 50
                 ? crawledContent[item.url]
@@ -690,22 +715,16 @@ New Search Query:`;
                 isLocal: false,
                 rank: item.rank,
               };
-              combinedIndices.push(newChunk);
-              onlineCache[item.url] = newChunk;
-            } catch (e) {}
+              newOnlineChunks.push(newChunk);
+            } catch (_) {}
           }
+          onlineCache[newQueryKey] = newOnlineChunks;
           await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
         }
       }
     }
 
     // Extract top 5 for LLM
-    let localChunks = combinedIndices.filter((c) => c.isLocal);
-    let bestLocal = localChunks.length > 0 ? localChunks[0] : null;
-
-    // Only push the best local chunk if we haven't filtered it out during eval, but wait, the eval should have filtered it if it was irrelevant.
-    // So we don't automatically append it anymore if it wasn't relevant.
-
     if (requiresSearch && foundAnswer) {
       if (finalRelevantIndices) {
         selectedChunks = finalRelevantIndices.map((i) => ({
@@ -943,6 +962,7 @@ app.post("/api/clear-history", async (req, res) => {
 app.post("/api/clear-index", async (req, res) => {
   try {
     await writeJsonFile(LOCAL_INDEX_FILE, {});
+    await writeJsonFile(ONLINE_CACHE_FILE, {});
     res.json({ success: true });
   } catch (error) {
     console.error("Clear index error:", error);
