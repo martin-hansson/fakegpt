@@ -6,9 +6,9 @@ import fs from "fs/promises";
 import path from "path";
 import { CheerioCrawler } from "crawlee";
 
-// CHANGE THESE IF YOU WANT TO TEST ANOTHER LLM OR EMBEDDING MODEL.
-const GEN_MODEL = "qwen3:4b";
-const EMBED_MODEL = "embeddinggemma"; // If you change this, remember you need to crawl the site again.
+// Model configuration (can be overridden via environment variables)
+const GEN_MODEL = process.env.GEN_MODEL || "qwen3:4b";
+const EMBED_MODEL = process.env.EMBED_MODEL || "embeddinggemma"; // If you change this, remember you need to crawl the site again.
 
 const app = express();
 app.use(cors());
@@ -293,11 +293,11 @@ app.post("/api/crawl", async (req, res) => {
         });
       } catch (e) {
         console.error(
-          "Embedding failed (is nomic-embed-text pulled?)",
+          `Embedding failed with ${EMBED_MODEL}:`,
           e.message,
         );
         throw new Error(
-          "Embedding model failed. Make sure to run: ollama pull ${}",
+          `Embedding model failed. Make sure to run: ollama pull ${EMBED_MODEL}`,
         );
       }
     }

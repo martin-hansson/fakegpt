@@ -28,14 +28,19 @@ This lab uses local LLMs to process data securely and for free.
 Once Ollama is installed and running, open your terminal (or Command Prompt) and pull the specific models required for this lab:
 
 ```bash
-# 1. Download the generative chatbot model (Llama 3.2 3B)
-ollama pull llama3.2:3b
+# 1. Download the generative chatbot model (Qwen 3 4B)
+ollama pull qwen3:4b
 
-# 2. Download the vector embedding model (Gemma)
-ollama pull nomic-embed-text
+# 2. Download the vector embedding model (EmbeddingGemma)
+ollama pull embeddinggemma
 ```
 
 *(Note: Depending on your internet connection, downloading the models may take a few minutes as they are several gigabytes in size).*
+
+If you want to use alternative models, you can override them using environment variables when starting the server:
+```bash
+GEN_MODEL="llama3.2:3b" EMBED_MODEL="nomic-embed-text" npm run dev
+```
 
 ---
 

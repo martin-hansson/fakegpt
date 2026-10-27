@@ -1,0 +1,3 @@
+- [x] Mindre aggro caching (query-keyed competitor cache without 5-turn wipe)
+- [x] Crawlern crawlar om lokalt index och ersätter tidigare crawl automatiskt
+- [ ] Instruktion för Linux/Windows i datasal (alt. skript)
