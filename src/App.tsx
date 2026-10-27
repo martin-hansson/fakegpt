@@ -621,6 +621,25 @@ function ThinkingContent({ thinking, hasStartedAnswer }: { thinking: string; has
   );
 }
 
+function checkIsCited(content: string, sourceUrl: string, index: number): boolean {
+  if (!content) return false;
+  const cleanUrl = (sourceUrl || '').trim().replace(/\/+$/, '');
+  if (cleanUrl && content.includes(cleanUrl)) return true;
+
+  const sourceNum = index + 1;
+  const bracketRegex = new RegExp(`\\[\\[?\\s*${sourceNum}\\s*\\]?\\]`);
+  if (bracketRegex.test(content)) return true;
+
+  try {
+    const urlObj = new URL(sourceUrl);
+    if (urlObj.pathname && urlObj.pathname.length > 1 && content.includes(urlObj.pathname)) {
+      return true;
+    }
+  } catch (_) {}
+
+  return false;
+}
+
 function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[], content: string, rewrittenQuery?: string }) {
   const [isOpen, setIsOpen] = useState(false);
   return (
@@ -629,7 +648,7 @@ function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[],
         className="sources-pill" 
         onClick={() => setIsOpen(!isOpen)}
       >
-        View Sources
+        View Sources ({sources.length})
       </button>
       <div className={`sources-animator ${isOpen ? 'open' : ''}`}>
         <div className="sources-content-inner">
@@ -642,20 +661,26 @@ function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[],
             <div style={{ color: 'var(--text-secondary)' }}>No sources were retrieved for this query.</div>
           ) : (
             sources.map((c, idx) => {
+              const isCited = c.isRelevant !== false && checkIsCited(content, c.source, idx);
               let statusBadge = '';
               if (c.isRelevant === false) {
-                statusBadge = '<span style="color: #f85149;">Rejected by Evaluator LLM</span>';
+                statusBadge = '<span style="color: #f85149; font-weight: 600;">[2. Evaluator: Rejected]</span>';
+              } else if (isCited) {
+                statusBadge = '<span style="color: #58a6ff; font-weight: 600;">[2. Evaluator: Accepted]</span> <span style="color: #3fb950; font-weight: 700; margin-left: 6px;">[3. Cited in Answer]</span>';
               } else {
-                const isCited = content.includes(c.source);
-                statusBadge = isCited ? '<span style="color: #3fb950;">Cited</span>' : '<span style="color: var(--text-secondary);">Read by LLM (Not Cited)</span>';
+                statusBadge = '<span style="color: #58a6ff; font-weight: 600;">[2. Evaluator: Accepted]</span> <span style="color: var(--text-secondary); margin-left: 6px;">[3. Read by LLM, Not Cited]</span>';
               }
               
               return (
                 <div key={idx} className="source-item">
-                  <strong>{idx + 1}. <a href={c.source} target="_blank">{c.source}</a></strong>
-                  <span style={{ fontSize: '0.75rem', marginLeft: '8px' }} dangerouslySetInnerHTML={{ __html: statusBadge }} />
-                  <span className="source-meta">Cosine Similarity: {c.similarity.toFixed(3)}</span>
-                  {c.isLocal && <span className="source-meta" style={{ color: '#a371f7' }}>(Local Index)</span>}
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                    <strong>{idx + 1}. <a href={c.source} target="_blank" rel="noreferrer">{c.source}</a></strong>
+                    <span style={{ fontSize: '0.75rem' }} dangerouslySetInnerHTML={{ __html: statusBadge }} />
+                  </div>
+                  <span className="source-meta">
+                    Stage 1: Ranked #{idx + 1} (Cosine Similarity: {c.similarity.toFixed(3)})
+                    {c.isLocal && <span style={{ color: '#a371f7', marginLeft: '8px', fontWeight: 600 }}>(Target Site)</span>}
+                  </span>
                   <em>"{c.chunk.replace(/\n/g, ' ')}"</em>
                 </div>
               );
