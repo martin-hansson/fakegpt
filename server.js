@@ -99,6 +99,38 @@ function normalizeSiteUrl(rawUrl) {
   }
 }
 
+function chunkSectionText(text, heading, url, title, targetArray) {
+  const prefix = heading && heading !== title ? `[${heading}] ` : "";
+  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  let currentChunk = "";
+
+  for (let sentence of sentences) {
+    sentence = sentence.trim();
+    if (!sentence) continue;
+
+    if (
+      (currentChunk + " " + sentence).length > 500 &&
+      currentChunk.length > 0
+    ) {
+      targetArray.push({
+        text: `${prefix}${currentChunk.trim()}`,
+        url: url,
+        title: title,
+      });
+      currentChunk = sentence;
+    } else {
+      currentChunk += (currentChunk ? " " : "") + sentence;
+    }
+  }
+  if (currentChunk.trim().length > 0) {
+    targetArray.push({
+      text: `${prefix}${currentChunk.trim()}`,
+      url: url,
+      title: title,
+    });
+  }
+}
+
 // Read/Write Helpers
 async function readJsonFile(filepath) {
   try {
@@ -150,41 +182,93 @@ app.post("/api/crawl", async (req, res) => {
         });
 
         const title = $("title").text().trim() || request.url;
-        $(
-          'script, style, nav, footer, header, aside, .skip-link, a[href^="#"]',
-        ).remove();
-        let text = $("body").text().replace(/\s+/g, " ").trim();
-        text = text.replace(/Skip to content/gi, "").trim();
 
-        if (text.length > 0) {
-          // Recursive-style sentence chunker
-          const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-          let currentChunk = "";
+        // 1. Extract Meta Description
+        const metaDesc =
+          $('meta[name="description"]').attr("content") ||
+          $('meta[property="og:description"]').attr("content") ||
+          "";
+        if (metaDesc.trim().length > 10) {
+          rawChunks.push({
+            text: `Meta Description: ${metaDesc.trim()}`,
+            url: request.url,
+            title: title,
+          });
+        }
 
-          for (let sentence of sentences) {
-            sentence = sentence.trim();
-            if (!sentence) continue;
-
-            if (
-              (currentChunk + " " + sentence).length > 500 &&
-              currentChunk.length > 0
-            ) {
+        // 2. Extract JSON-LD Structured Data
+        $('script[type="application/ld+json"]').each((_, el) => {
+          try {
+            const raw = $(el).text().trim();
+            if (raw) {
+              const parsed = JSON.parse(raw);
               rawChunks.push({
-                text: currentChunk.trim(),
+                text: `Structured Data (JSON-LD): ${JSON.stringify(parsed)}`,
                 url: request.url,
                 title: title,
               });
-              currentChunk = sentence;
-            } else {
-              currentChunk += (currentChunk ? " " : "") + sentence;
+            }
+          } catch (_) {}
+        });
+
+        // 3. Remove non-content elements
+        $(
+          'script, style, nav, footer, header, aside, .skip-link, a[href^="#"]',
+        ).remove();
+
+        // 4. Extract content with heading association
+        let currentHeading = title;
+        let sectionText = "";
+        const initialChunkCount = rawChunks.length;
+
+        $("h1, h2, h3, p, li, blockquote, dt, dd").each((_, el) => {
+          const tag = el.tagName.toLowerCase();
+          const elText = $(el).text().replace(/\s+/g, " ").trim();
+          if (!elText) return;
+
+          if (tag === "h1" || tag === "h2" || tag === "h3") {
+            if (sectionText.trim().length > 0) {
+              chunkSectionText(
+                sectionText,
+                currentHeading,
+                request.url,
+                title,
+                rawChunks,
+              );
+              sectionText = "";
+            }
+            currentHeading = elText;
+          } else {
+            sectionText += (sectionText ? " " : "") + elText;
+            if (sectionText.length > 500) {
+              chunkSectionText(
+                sectionText,
+                currentHeading,
+                request.url,
+                title,
+                rawChunks,
+              );
+              sectionText = "";
             }
           }
-          if (currentChunk.trim().length > 0) {
-            rawChunks.push({
-              text: currentChunk.trim(),
-              url: request.url,
-              title: title,
-            });
+        });
+
+        if (sectionText.trim().length > 0) {
+          chunkSectionText(
+            sectionText,
+            currentHeading,
+            request.url,
+            title,
+            rawChunks,
+          );
+        }
+
+        // 5. Fallback for sites with custom div structures
+        if (rawChunks.length === initialChunkCount) {
+          let text = $("body").text().replace(/\s+/g, " ").trim();
+          text = text.replace(/Skip to content/gi, "").trim();
+          if (text.length > 0) {
+            chunkSectionText(text, title, request.url, title, rawChunks);
           }
         }
       },
