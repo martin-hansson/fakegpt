@@ -407,49 +407,35 @@ app.post("/api/chats/:id", async (req, res) => {
       let locationContext = userLocation
         ? ` The user's current location is ${userLocation}.`
         : "";
-      const rewritePrompt = `Rewrite the user's query into a concise search engine query, using the chat history to resolve context if needed. Output ONLY the search query. Today's date is ${currentDate}.${locationContext}
-CRITICAL RULE 1: For queries about recurring events or current status (e.g., "who won the superbowl"), you MUST append the current year (${currentYear}).
-CRITICAL RULE 2: For queries about NEWS, CURRENT EVENTS, or fast-changing topics (e.g., "what's the news", "local news"), you MUST append the FULL CURRENT DATE (${currentDate}). This applies to BOTH global and local news.
-CRITICAL RULE 3: If the user asks for local places, weather, news, or recommendations (e.g., "wine bars", "local news") without specifying a location, you MUST append their current location to the query if it is known. (For local news, you must append BOTH the location and the full date). If they specify a location (e.g., "news in Berlin"), use that instead.
-CRITICAL RULE 4: If the user is just saying hello or asking about capabilities, output exactly: NO_SEARCH. NOTE: "whats happening right now" is asking for news, so DO NOT output NO_SEARCH.
-CRITICAL RULE 5: ONLY use the chat history to resolve context if the user's query explicitly refers to the previous topic or contains pronouns.
+      const rewritePrompt = `Rewrite the user's query into a concise search engine query, using chat history to resolve context or pronouns if needed. Output ONLY the search query.
+CRITICAL RULE 1: If the user is just saying hello, greeting, thanking, or asking about bot capabilities (e.g., "hi", "how are you", "what can you do"), output exactly: NO_SEARCH.
+CRITICAL RULE 2: Keep the search query focused on the essential keywords, concepts, or entities asked about. Do NOT add unnecessary fluff.
+CRITICAL RULE 3: If the user explicitly asks for time-sensitive news, recent updates, or current year information, you may append the current year (${currentYear}). Otherwise, do not append dates.
+CRITICAL RULE 4: If the user explicitly asks for local places or recommendations ("near me", "nearby", "local") without naming a city, and their location is known (${userLocation || "none"}), you may append the location. If they specify a location, use that. If the query is not location-specific, do NOT append a location.
+CRITICAL RULE 5: ONLY use the chat history to resolve context if the user's query explicitly refers to the previous topic or contains pronouns (e.g. "what about that?", "how much does it cost?").
 
 Example 1:
-User's latest query: "who won the superbowl?"
-Search query: superbowl winner ${currentYear}
-
-Example 2:
 User's latest query: "Hello!"
 Search query: NO_SEARCH
 
-Example 3:
+Example 2:
 User's latest query: "what can you do?"
 Search query: NO_SEARCH
 
+Example 3:
+User's latest query: "best espresso beans for dark roast"
+Search query: best dark roast espresso beans
+
 Example 4:
-User's latest query: "Give me a news brief"
-Search query: latest news summary ${currentDate}
+User's latest query: "who won the superbowl?"
+Search query: superbowl winner ${currentYear}
 
 Example 5:
 Chat history:
-User: Give me a news brief
-Assistant: Here is the news...
-User's latest query: "what about local news?"
-Search query: local news in ${userLocation || "Stockholm, Sweden"} ${currentDate}
-
-Example 6:
-Chat history:
-User: who won the superbowl?
-Assistant: The Seattle Seahawks won Super Bowl LX.
-User's latest query: "what about the previous years?"
-Search query: superbowl winners before ${currentYear}
-
-Example 7:
-Chat history:
-User: who are you?
-Assistant: I am FakeGPT...
-User's latest query: "Whats happening in the world?"
-Search query: latest world news ${currentDate}
+User: Tell me about Acme Coffee
+Assistant: Acme Coffee is an artisan roaster...
+User's latest query: "where are they located?"
+Search query: Acme Coffee location
 
 Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
@@ -580,28 +566,31 @@ Search query:`;
         .join("\n\n");
 
       let hasOnlineSource = topK.some((c) => !c.isLocal);
-      let skipEval = attempts === 1 && topK.length > 0 && !hasOnlineSource;
+      let skipEval =
+        attempts === 1 &&
+        topK.length > 0 &&
+        !hasOnlineSource &&
+        cachedCompetitors.length === 0;
 
       // Evaluate if context has answer
       res.write(
         `event: ${JSON.stringify({ type: "message", content: `Evaluating search results...` })}\n\n`,
       );
       if (!skipEval && contextText.trim().length > 0) {
-        const evalPrompt = `You are a strict relevance evaluator.
+        const evalPrompt = `You are a strict relevance evaluator for a search engine.
 Context:
 ${contextText}
 
 Question: "${currentSearchQuery}"
 (Original User Input: "${userQuery}")
 
-Determine if the Context contains relevant information that helps address the Question.
+Determine if the Context contains relevant factual information that directly addresses the Question.
 CRITICAL RULES FOR EVALUATION:
-1. If the Question asks for news in a specific location (e.g. "Stockholm, Sweden"), you MUST verify that the text inside the source explicitly mentions that location or news happening in that location. If it does not, you MUST NOT include its number in your 'YES' response. If NONE of the sources mention the requested location, you MUST output exactly 'NO'.
-2. If the Question asks for a general news brief WITHOUT a specific location, ALL valid news articles and summaries are highly relevant and must be accepted.
-
-Make sure to read the ENTIRE chunk for each source, as crawled snippets often start with web metadata or navigation links but contain the actual relevant content later in the text.
-If NO sources are relevant, reply EXACTLY with 'NO'.
-If ANY sources are relevant, reply 'YES' followed by a comma-separated list of the specific source numbers (e.g. YES: 1, 3) that are ACTUALLY relevant to the question. Do not include completely irrelevant sources (e.g. a restaurant ad when asking for news, or global news when asking for local news).`;
+1. Read the full text of each source carefully. Crawled snippets often start with navigation links, headers, or metadata, but contain relevant content further in the text.
+2. A source is relevant if it contains facts, descriptions, data, or answers that help address what is asked in the Question.
+3. Completely off-topic or irrelevant sources must NOT be included in your answer.
+4. If NO sources are relevant, reply EXACTLY with 'NO'.
+5. If ANY sources are relevant, reply 'YES' followed by a comma-separated list of the specific source numbers (e.g. YES: 1, 3) that are ACTUALLY relevant to the question.`;
         const evalRes = await ollama.chat({
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
