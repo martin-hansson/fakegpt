@@ -34,7 +34,8 @@ if (!fsSync.existsSync(DATA_DIR)) {
   fsSync.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const ollama = new Ollama({ host: "http://localhost:11434" });
+const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
+const ollama = new Ollama({ host: OLLAMA_HOST });
 
 const isThinking = await ollama
   .show({ model: GEN_MODEL })
@@ -669,6 +670,7 @@ New Search Query:`;
             messages: [{ role: "user", content: newQueryPrompt }],
             stream: false,
             think: false,
+            options: { num_predict: 50 },
           });
           currentSearchQuery = newQueryRes.message.content
             .replace(/["']/g, "")
