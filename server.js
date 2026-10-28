@@ -603,23 +603,23 @@ CRITICAL RULES FOR EVALUATION:
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
           stream: false,
-          think: false,
-          options: { num_predict: 80 },
         });
-        const evalRaw =
-          (evalRes.message?.content || "") +
-          " " +
-          (evalRes.message?.thinking || "");
-        const evalText = evalRaw.trim().toUpperCase();
+        const contentText = (evalRes.message?.content || "").trim();
+        const evalRaw = contentText || (evalRes.message?.thinking || "").trim();
+        console.log(
+          `Evaluator decision: "${contentText}" (thinking: ${evalRes.message?.thinking ? "present" : "none"})`,
+        );
+        const evalText = evalRaw.toUpperCase();
 
         if (evalText.includes("YES")) {
           console.log(
             `Agent loop: Cache/Index contained answer on attempt ${attempts}. (${evalText})`,
           );
 
-          // Identify relevant sources, but don't mutate topK yet so frontend sees all evaluated sources
+          // Identify relevant sources, prioritizing contentText for numbers
           const relevantIndices = [];
-          const matches = evalText.match(/\d+/g);
+          const textToParse = contentText.toUpperCase().includes("YES") ? contentText : evalRaw;
+          const matches = textToParse.match(/\d+/g);
           if (matches) {
             for (const m of matches) {
               const idx = parseInt(m, 10) - 1;
@@ -669,12 +669,9 @@ New Search Query:`;
             model: model,
             messages: [{ role: "user", content: newQueryPrompt }],
             stream: false,
-            think: false,
-            options: { num_predict: 50 },
           });
-          currentSearchQuery = newQueryRes.message.content
-            .replace(/["']/g, "")
-            .trim();
+          const rawNewQuery = (newQueryRes.message?.content || "").replace(/["']/g, "").trim();
+          currentSearchQuery = rawNewQuery.replace(/^.*New Search Query:\s*/i, "").trim() || currentSearchQuery;
           if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
 
           console.log("Sleeping 2.5 seconds to avoid DDG rate limits...");
