@@ -280,7 +280,34 @@ app.post("/api/crawl", async (req, res) => {
     });
 
     console.log(`Starting crawler for ${url}...`);
-    await crawler.run([url]);
+    const startUrls = [url];
+    try {
+      const sitemapCandidates = [
+        `${url.replace(/\/+$/, "")}/sitemap.xml`,
+        `${baseUrl}/sitemap.xml`,
+      ];
+      for (const smUrl of sitemapCandidates) {
+        try {
+          const smRes = await fetch(smUrl, { signal: AbortSignal.timeout(2000) });
+          if (smRes.ok) {
+            const smXml = await smRes.text();
+            const locMatches = smXml.match(/<loc>(.*?)<\/loc>/gi);
+            if (locMatches) {
+              for (const locTag of locMatches) {
+                const loc = locTag.replace(/<\/?loc>/gi, "").trim();
+                if (loc && !startUrls.includes(loc)) {
+                  startUrls.push(loc);
+                }
+              }
+              console.log(`Discovered sitemap at ${smUrl} with ${locMatches.length} URLs`);
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    await crawler.run(startUrls);
     try {
       await crawlQueue.drop();
     } catch (_) {}
