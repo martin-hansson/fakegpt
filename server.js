@@ -358,6 +358,7 @@ app.post("/api/chats/:id", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
 
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: "Messages array is required" });
@@ -379,19 +380,9 @@ app.post("/api/chats/:id", async (req, res) => {
       chatIndex = chats.length - 1;
     }
 
-    if (chat.messages.length === 0 && messages.length > 0) {
-      try {
-        const titlePrompt = `Generate a very brief, concise title (max 5 words) for this conversation based on the first message:\n\nUser: ${messages[0].content}`;
-        const titleRes = await ollama.chat({
-          model: model,
-          messages: [{ role: "user", content: titlePrompt }],
-          stream: false,
-          think: false,
-        });
-        chat.title = titleRes.message.content.replace(/["*]/g, "").trim();
-      } catch (e) {
-        console.error("Failed to generate title:", e);
-      }
+    if (chat.messages.length === 0 && messages.length > 0 && chat.title === "New Chat") {
+      const summaryTitle = messages[0].content.trim().slice(0, 30);
+      chat.title = summaryTitle ? `${summaryTitle}...` : "New Chat";
     }
 
     const userQuery = messages[messages.length - 1].content;
@@ -448,43 +439,52 @@ Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
 Search query:`;
 
-      res.write(
-        `event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`,
-      );
-      const rewriteRes = await ollama.chat({
-        model: model,
-        messages: [{ role: "user", content: rewritePrompt }],
-        stream: true,
-        think: false, // Smaller thinking models overthink too much
-      });
-
-      let rewritten = "";
-      for await (const chunk of rewriteRes) {
-        if (chunk.message.thinking) {
-          res.write(
-            `data: ${JSON.stringify({ thinking: chunk.message.thinking })}\n\n`,
-          );
-        } else if (chunk.message.content) {
-          rewritten += chunk.message.content;
+      if (messages.length <= 1) {
+        if (/^(hi|hello|hey|greetings|what can you do|who are you)[!.?]?$/i.test(userQuery.trim())) {
+          requiresSearch = false;
+          searchQuery = "";
+        } else {
+          searchQuery = userQuery;
         }
-      }
+      } else {
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`,
+        );
+        const rewriteRes = await ollama.chat({
+          model: model,
+          messages: [{ role: "user", content: rewritePrompt }],
+          stream: true,
+          think: false, // Smaller thinking models overthink too much
+          options: { num_predict: 50 },
+        });
 
-      rewritten = rewritten.replace(/["']/g, "").trim();
-      if (rewritten.includes("</think>")) {
-        // Sometimes, the model ignores the instruction not to think, and does so anyways.
-        rewritten = rewritten.split("</think>")[1].trim();
-      }
+        let rewritten = "";
+        for await (const chunk of rewriteRes) {
+          if (chunk.message.thinking) {
+            res.write(
+              `data: ${JSON.stringify({ thinking: chunk.message.thinking })}\n\n`,
+            );
+          } else if (chunk.message.content) {
+            rewritten += chunk.message.content;
+          }
+        }
 
-      if (
-        rewritten.toUpperCase() === "NO_SEARCH" ||
-        rewritten.toUpperCase() === "IGNORE_SEARCH"
-      ) {
-        requiresSearch = false;
-        searchQuery = "";
-        console.log(`Intent check: Query does not require search.`);
-      } else if (rewritten && rewritten.length < 150) {
-        searchQuery = rewritten;
-        console.log(`Rewrote query for search: "${searchQuery}"`);
+        rewritten = rewritten.replace(/["']/g, "").trim();
+        if (rewritten.includes("</think>")) {
+          rewritten = rewritten.split("</think>")[1].trim();
+        }
+
+        if (
+          rewritten.toUpperCase() === "NO_SEARCH" ||
+          rewritten.toUpperCase() === "IGNORE_SEARCH"
+        ) {
+          requiresSearch = false;
+          searchQuery = "";
+          console.log(`Intent check: Query does not require search.`);
+        } else if (rewritten && rewritten.length < 150) {
+          searchQuery = rewritten;
+          console.log(`Rewrote query for search: "${searchQuery}"`);
+        }
       }
     } catch (e) {
       console.error(
@@ -603,8 +603,13 @@ CRITICAL RULES FOR EVALUATION:
           messages: [{ role: "user", content: evalPrompt }],
           stream: false,
           think: false,
+          options: { num_predict: 80 },
         });
-        const evalText = evalRes.message.content.trim().toUpperCase();
+        const evalRaw =
+          (evalRes.message?.content || "") +
+          " " +
+          (evalRes.message?.thinking || "");
+        const evalText = evalRaw.trim().toUpperCase();
 
         if (evalText.includes("YES")) {
           console.log(
