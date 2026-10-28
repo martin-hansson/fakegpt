@@ -4,7 +4,7 @@ import * as cheerio from "cheerio";
 import { Ollama } from "ollama";
 import fs from "fs/promises";
 import path from "path";
-import { CheerioCrawler } from "crawlee";
+import { CheerioCrawler, RequestQueue } from "crawlee";
 
 // Model configuration (can be overridden via environment variables)
 const GEN_MODEL = process.env.GEN_MODEL || "qwen3:4b";
@@ -171,7 +171,11 @@ app.post("/api/crawl", async (req, res) => {
     const queue = [url];
     let rawChunks = [];
 
+    const crawlQueue = await RequestQueue.open(
+      `crawl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    );
     const crawler = new CheerioCrawler({
+      requestQueue: crawlQueue,
       maxRequestsPerCrawl: 20, // Safe limit for lab
       async requestHandler({ request, $, enqueueLinks, log }) {
         log.info(`Crawling: ${request.url}`);
@@ -276,6 +280,9 @@ app.post("/api/crawl", async (req, res) => {
 
     console.log(`Starting crawler for ${url}...`);
     await crawler.run([url]);
+    try {
+      await crawlQueue.drop();
+    } catch (_) {}
 
     console.log(`Embedding ${rawChunks.length} chunks...`);
     let embeddedChunks = [];
@@ -706,7 +713,11 @@ New Search Query:`;
 
           let crawledContent = {};
           if (webChunks.length > 0) {
+            const webQueue = await RequestQueue.open(
+              `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            );
             const crawler = new CheerioCrawler({
+              requestQueue: webQueue,
               maxRequestsPerCrawl: 5,
               maxRequestRetries: 0,
               maxConcurrency: 1, // Crawl 1 page at a time to avoid Cloudflare/WAF IP blocks
@@ -765,6 +776,7 @@ New Search Query:`;
             if (validUrls.length > 0) {
               try {
                 await crawler.run(validUrls);
+                await webQueue.drop();
               } catch (_) {}
             }
           }
