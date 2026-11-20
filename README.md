@@ -46,7 +46,7 @@ GEN_MODEL="llama3.2:3b" EMBED_MODEL="nomic-embed-text" npm run dev
 
 ## Running the Lab
 
-Once all prerequisites are installed, you can start the lab application. 
+Once all prerequisites are installed, you can start the lab application. For the full student assignment instructions, see [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
 1. **Open your terminal** and navigate to this project folder.
 2. **Install project dependencies:**
@@ -59,6 +59,12 @@ Once all prerequisites are installed, you can start the lab application.
    ```
 4. **Open your browser** and navigate to the URL provided in the terminal (usually `http://localhost:5173`).
 
+### Using the Lab Controls
+
+- **Crawling a Target Site (`LAB SETTINGS`):** Enter your site's URL (e.g., `https://user.github.io/geo-lab/before/`) and click the refresh button. Crawling is scoped to that URL's directory prefix (so `/after/` will not crawl `/before/`) and automatically replaces the active local site while preserving cached online competitors for a fair A/B test.
+- **Clear Target Site (trash icon) vs. Clear Web Cache (globe icon):** Use the trash icon to clear only your indexed target site, or the globe icon to wipe cached web search competitors and fetch fresh online results.
+- **Export Chat History (download icon next to `Recents`):** Downloads your full chat sessions (including retrieved sources, similarity scores, and evaluator decisions) as a JSON file for submission.
+
 > [!NOTE]
 > **Windows users:** in case `npm` doesn't work, try running the following command:
 > `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
@@ -69,4 +75,5 @@ Once all prerequisites are installed, you can start the lab application.
 
 - **Server Crash / ECONNREFUSED:** Ensure Ollama is running in the background. If the Node.js server crashes, simply restart it by pressing `Ctrl+C` and running `npm run dev` again.
 - **Crawler 403 Errors:** If you see 403 Forbidden errors in the terminal, it means the website's firewall (like Cloudflare) blocked the automated web crawler. This is normal when scraping the live web. The LLM will fall back to other successful pages.
-- **Empty Local Index:** If your local cosine similarity scores are extremely low, ensure you have generated your `local_index.json` using the correct `embeddinggemma` model.
+- **DuckDuckGo Rate Limits (HTTP 202 / 0 Results):** If many students share the same network (e.g. a computer lab), DuckDuckGo may temporarily rate-limit searches. FakeGPT will not cache empty results — wait a moment and try again, or reuse your already cached competitors between Before and After runs.
+- **Empty Local Index:** Check the `Indexed:` status under `LAB SETTINGS` to verify how many pages and chunks were extracted. If your local cosine similarity scores are unexpectedly low, verify you are using the matching `EMBED_MODEL` (`embeddinggemma` by default) and re-crawl your site.
