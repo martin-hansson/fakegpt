@@ -1,8 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2 } from 'lucide-react';
+import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, Download, Globe } from 'lucide-react';
 import './index.css';
+
+type IndexStatus = {
+  localSite: {
+    url: string;
+    crawledAt: string | null;
+    chunksCount: number;
+    pagesCount: number;
+  } | null;
+  cachedQueriesCount: number;
+};
 
 type LoadingMessage = {
   type: 'text' | 'url';
@@ -45,7 +55,23 @@ function App() {
   const [editTitle, setEditTitle] = useState('');
   const [menuOpenForId, setMenuOpenForId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const [indexStatus, setIndexStatus] = useState<IndexStatus>({ localSite: null, cachedQueriesCount: 0 });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchIndexStatus = async () => {
+    try {
+      const res = await fetch('/api/index-status');
+      if (res.ok) {
+        const data: IndexStatus = await res.json();
+        setIndexStatus(data);
+        if (data.localSite?.url) {
+          setTargetUrl(prev => prev || data.localSite!.url);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchChats = async () => {
     try {
@@ -61,6 +87,7 @@ function App() {
 
   useEffect(() => {
     fetchChats();
+    fetchIndexStatus();
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
@@ -195,6 +222,7 @@ function App() {
       if (res.ok) {
         await res.json();
         setCrawlSuccess(true);
+        fetchIndexStatus();
         setTimeout(() => setCrawlSuccess(false), 3000);
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -249,17 +277,52 @@ function App() {
     }
   };
 
-  const handleClearIndex = async () => {
+  const handleExportChats = async () => {
     try {
-      const res = await fetch('/api/clear-index', { method: 'POST' });
+      const res = await fetch('/api/chats');
+      if (!res.ok) throw new Error('Failed to fetch chats');
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `fakegpt-chats-${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(`Failed to export chats: ${e.message}`);
+    }
+  };
+
+  const handleClearLocalIndex = async () => {
+    try {
+      const res = await fetch('/api/clear-local-index', { method: 'POST' });
       if (res.ok) {
         setTargetUrl('');
+        fetchIndexStatus();
       } else {
         const errData = await res.json().catch(() => ({}));
-        console.error(`Failed to clear index: ${errData.error || 'Unknown error'}`);
+        console.error(`Failed to clear local site: ${errData.error || 'Unknown error'}`);
       }
     } catch (e: any) {
-      console.error(`Error clearing index: ${e.message}`);
+      console.error(`Error clearing local site: ${e.message}`);
+    }
+  };
+
+  const handleClearWebCache = async () => {
+    try {
+      const res = await fetch('/api/clear-web-cache', { method: 'POST' });
+      if (res.ok) {
+        fetchIndexStatus();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.error(`Failed to clear web cache: ${errData.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      console.error(`Error clearing web cache: ${e.message}`);
     }
   };
 
@@ -357,8 +420,9 @@ function App() {
         }
       }
 
-      // Refresh chat list to update title
+      // Refresh chat list and index status (in case new web competitors were cached)
       fetchChats();
+      fetchIndexStatus();
     } catch (error: any) {
       console.error(error);
       setMessages(prev => [...prev, { 
@@ -411,9 +475,14 @@ function App() {
             <div className="chat-history-list">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', padding: '0.5rem 0.75rem', marginTop: '0.5rem' }}>
                 <span>Recents</span>
-                <button onClick={handleClearHistory} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Chat History">
-                  <Trash2 size={12} className="hover-text-primary" />
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <button onClick={handleExportChats} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Export Chat History (JSON)">
+                    <Download size={12} className="hover-text-primary" />
+                  </button>
+                  <button onClick={handleClearHistory} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Chat History">
+                    <Trash2 size={12} className="hover-text-primary" />
+                  </button>
+                </div>
               </div>
               {chatList.map(chat => (
                 <div 
@@ -485,18 +554,23 @@ function App() {
             <div className="geo-settings">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
                 <span>LAB SETTINGS</span>
-                <button onClick={handleClearIndex} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear RAG Index">
-                  <Trash2 size={12} className="hover-text-primary" />
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <button onClick={handleClearLocalIndex} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Indexed Target Site (keeps web cache)">
+                    <Trash2 size={12} className="hover-text-primary" />
+                  </button>
+                  <button onClick={handleClearWebCache} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Cached Web Competitors">
+                    <Globe size={12} className="hover-text-primary" />
+                  </button>
+                </div>
               </div>
               <p style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem'}}>
-                Enter your target website URL to optimize:
+                Enter your target website URL (crawling replaces the active site):
               </p>
               <div style={{display: 'flex', gap: '0.5rem'}}>
                 <input 
                   type="text" 
                   className="input-field" 
-                  placeholder="http://localhost:8000"
+                  placeholder="https://user.github.io/site/"
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
                   style={{marginBottom: 0}}
@@ -505,10 +579,27 @@ function App() {
                   className="crawl-btn" 
                   onClick={handleCrawl}
                   disabled={isCrawling || !targetUrl.trim()}
-                  title="Crawl and rebuild index"
+                  title="Crawl and replace active site index"
                 >
                   {crawlSuccess ? <Check size={14} color="var(--text-primary)" /> : <RefreshCw size={14} className={isCrawling ? "spin" : ""} />}
                 </button>
+              </div>
+              <div style={{ marginTop: '0.6rem', fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                {indexStatus.localSite ? (
+                  <>
+                    <div style={{ color: '#a371f7', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={indexStatus.localSite.url}>
+                      Indexed: {indexStatus.localSite.url}
+                    </div>
+                    <div>
+                      {indexStatus.localSite.pagesCount} {indexStatus.localSite.pagesCount === 1 ? 'page' : 'pages'} · {indexStatus.localSite.chunksCount} {indexStatus.localSite.chunksCount === 1 ? 'chunk' : 'chunks'}
+                    </div>
+                  </>
+                ) : (
+                  <div>No target site indexed yet</div>
+                )}
+                <div style={{ opacity: 0.8 }}>
+                  Web competitor cache: {indexStatus.cachedQueriesCount} {indexStatus.cachedQueriesCount === 1 ? 'query' : 'queries'}
+                </div>
               </div>
             </div>
           </>

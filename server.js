@@ -5,6 +5,17 @@ import { Ollama } from "ollama";
 import fs from "fs/promises";
 import path from "path";
 import { CheerioCrawler, RequestQueue } from "crawlee";
+import {
+  cosineSimilarity,
+  normalizeQueryKey,
+  normalizeSiteUrl,
+  getSitePrefix,
+  isUrlWithinPrefix,
+  getSitemapCandidates,
+  extractChunksFromHtml,
+  parseEvaluatorResponse,
+  isTrivialGreeting,
+} from "./lib/rag-utils.js";
 
 // Model configuration (can be overridden via environment variables)
 const GEN_MODEL = process.env.GEN_MODEL || "qwen3:4b";
@@ -39,26 +50,18 @@ const ollama = new Ollama({ host: OLLAMA_HOST });
 
 const isThinking = await ollama
   .show({ model: GEN_MODEL })
-  .then((res) => res.capabilities?.includes("thinking") || false);
+  .then((res) => res.capabilities?.includes("thinking") || false)
+  .catch((err) => {
+    console.warn(
+      `Could not query Ollama model capabilities for ${GEN_MODEL}: ${err.message}`,
+    );
+    return false;
+  });
 
 // Serve the compiled Vite static assets
 app.use(express.static(FRONTEND_DIR));
 
 const SIMILARITY_THRESHOLD = 0.1;
-
-function cosineSimilarity(vecA, vecB) {
-  if (!vecA || !vecB) return 0;
-  let dotProduct = 0,
-    normA = 0,
-    normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
 
 async function initDataStorage() {
   try {
@@ -82,56 +85,6 @@ async function initDataStorage() {
 }
 initDataStorage();
 
-function normalizeQueryKey(q) {
-  if (!q) return "";
-  return q.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function normalizeSiteUrl(rawUrl) {
-  try {
-    const u = new URL(rawUrl);
-    let p = u.pathname;
-    if (p.endsWith("/") && p.length > 1) {
-      p = p.slice(0, -1);
-    }
-    return `${u.protocol}//${u.host}${p === "/" ? "" : p}`;
-  } catch (e) {
-    return rawUrl.trim().replace(/\/+$/, "");
-  }
-}
-
-function chunkSectionText(text, heading, url, title, targetArray) {
-  const prefix = heading && heading !== title ? `[${heading}] ` : "";
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-  let currentChunk = "";
-
-  for (let sentence of sentences) {
-    sentence = sentence.trim();
-    if (!sentence) continue;
-
-    if (
-      (currentChunk + " " + sentence).length > 500 &&
-      currentChunk.length > 0
-    ) {
-      targetArray.push({
-        text: `${prefix}${currentChunk.trim()}`,
-        url: url,
-        title: title,
-      });
-      currentChunk = sentence;
-    } else {
-      currentChunk += (currentChunk ? " " : "") + sentence;
-    }
-  }
-  if (currentChunk.trim().length > 0) {
-    targetArray.push({
-      text: `${prefix}${currentChunk.trim()}`,
-      url: url,
-      title: title,
-    });
-  }
-}
-
 // Read/Write Helpers
 async function readJsonFile(filepath) {
   try {
@@ -154,6 +107,40 @@ async function writeJsonFile(filepath, data) {
 }
 
 // --- INDEX SERVICE ---
+app.get("/api/index-status", async (req, res) => {
+  try {
+    const localIndex = await readJsonFile(LOCAL_INDEX_FILE);
+    const onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
+
+    const siteKeys = Object.keys(localIndex || {});
+    let localSite = null;
+    if (siteKeys.length > 0) {
+      const siteUrl = siteKeys[0];
+      const entry = localIndex[siteUrl] || {};
+      const chunks = Array.isArray(entry.chunks) ? entry.chunks : [];
+      const pagesCount =
+        typeof entry.pagesCount === "number"
+          ? entry.pagesCount
+          : new Set(chunks.map((c) => c.source).filter(Boolean)).size;
+      localSite = {
+        url: siteUrl,
+        crawledAt: entry.crawledAt || null,
+        chunksCount: chunks.length,
+        pagesCount,
+      };
+    }
+
+    const cachedQueriesCount = Object.values(onlineCache || {}).filter(
+      (v) => Array.isArray(v) && v.length > 0,
+    ).length;
+
+    res.json({ localSite, cachedQueriesCount });
+  } catch (error) {
+    console.error("Failed to read index status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/crawl", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -161,16 +148,15 @@ app.post("/api/crawl", async (req, res) => {
   try {
     console.log(`Starting deep crawl for ${url}...`);
 
-    let baseUrl;
+    let sitePrefix;
     try {
-      baseUrl = new URL(url).origin;
+      sitePrefix = getSitePrefix(url);
     } catch (e) {
       return res.status(400).json({ error: "Invalid URL format" });
     }
 
-    const visited = new Set();
-    const queue = [url];
     let rawChunks = [];
+    const crawledPages = new Set();
 
     const crawlQueue = await RequestQueue.open(
       `crawl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -180,112 +166,25 @@ app.post("/api/crawl", async (req, res) => {
       maxRequestsPerCrawl: 20, // Safe limit for lab
       async requestHandler({ request, $, enqueueLinks, log }) {
         log.info(`Crawling: ${request.url}`);
+        crawledPages.add(request.url);
 
-        // Enqueue links on the same origin
+        // Enqueue links strictly within the submitted site's path prefix
         await enqueueLinks({
           strategy: "same-origin",
+          transformRequestFunction(req) {
+            return isUrlWithinPrefix(req.url, sitePrefix, url) ? req : false;
+          },
         });
 
-        const title = $("title").text().trim() || request.url;
-
-        // 1. Extract Meta Description
-        const metaDesc =
-          $('meta[name="description"]').attr("content") ||
-          $('meta[property="og:description"]').attr("content") ||
-          "";
-        if (metaDesc.trim().length > 10) {
-          rawChunks.push({
-            text: `Meta Description: ${metaDesc.trim()}`,
-            url: request.url,
-            title: title,
-          });
-        }
-
-        // 2. Extract JSON-LD Structured Data
-        $('script[type="application/ld+json"]').each((_, el) => {
-          try {
-            const raw = $(el).text().trim();
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              rawChunks.push({
-                text: `Structured Data (JSON-LD): ${JSON.stringify(parsed)}`,
-                url: request.url,
-                title: title,
-              });
-            }
-          } catch (_) {}
-        });
-
-        // 3. Remove non-content elements
-        $(
-          'script, style, nav, footer, header, aside, .skip-link, a[href^="#"]',
-        ).remove();
-
-        // 4. Extract content with heading association
-        let currentHeading = title;
-        let sectionText = "";
-        const initialChunkCount = rawChunks.length;
-
-        $("h1, h2, h3, p, li, blockquote, dt, dd").each((_, el) => {
-          const tag = el.tagName.toLowerCase();
-          const elText = $(el).text().replace(/\s+/g, " ").trim();
-          if (!elText) return;
-
-          if (tag === "h1" || tag === "h2" || tag === "h3") {
-            if (sectionText.trim().length > 0) {
-              chunkSectionText(
-                sectionText,
-                currentHeading,
-                request.url,
-                title,
-                rawChunks,
-              );
-              sectionText = "";
-            }
-            currentHeading = elText;
-          } else {
-            sectionText += (sectionText ? " " : "") + elText;
-            if (sectionText.length > 500) {
-              chunkSectionText(
-                sectionText,
-                currentHeading,
-                request.url,
-                title,
-                rawChunks,
-              );
-              sectionText = "";
-            }
-          }
-        });
-
-        if (sectionText.trim().length > 0) {
-          chunkSectionText(
-            sectionText,
-            currentHeading,
-            request.url,
-            title,
-            rawChunks,
-          );
-        }
-
-        // 5. Fallback for sites with custom div structures
-        if (rawChunks.length === initialChunkCount) {
-          let text = $("body").text().replace(/\s+/g, " ").trim();
-          text = text.replace(/Skip to content/gi, "").trim();
-          if (text.length > 0) {
-            chunkSectionText(text, title, request.url, title, rawChunks);
-          }
-        }
+        const { chunks } = extractChunksFromHtml($.html(), request.url);
+        rawChunks = rawChunks.concat(chunks);
       },
     });
 
-    console.log(`Starting crawler for ${url}...`);
+    console.log(`Starting crawler for ${url} (prefix: ${sitePrefix})...`);
     const startUrls = [url];
     try {
-      const sitemapCandidates = [
-        `${url.replace(/\/+$/, "")}/sitemap.xml`,
-        `${baseUrl}/sitemap.xml`,
-      ];
+      const sitemapCandidates = getSitemapCandidates(url);
       for (const smUrl of sitemapCandidates) {
         try {
           const smRes = await fetch(smUrl, { signal: AbortSignal.timeout(2000) });
@@ -293,13 +192,21 @@ app.post("/api/crawl", async (req, res) => {
             const smXml = await smRes.text();
             const locMatches = smXml.match(/<loc>(.*?)<\/loc>/gi);
             if (locMatches) {
+              let addedCount = 0;
               for (const locTag of locMatches) {
                 const loc = locTag.replace(/<\/?loc>/gi, "").trim();
-                if (loc && !startUrls.includes(loc)) {
+                if (
+                  loc &&
+                  isUrlWithinPrefix(loc, sitePrefix, url) &&
+                  !startUrls.includes(loc)
+                ) {
                   startUrls.push(loc);
+                  addedCount++;
                 }
               }
-              console.log(`Discovered sitemap at ${smUrl} with ${locMatches.length} URLs`);
+              console.log(
+                `Discovered sitemap at ${smUrl} (${addedCount} matching URLs)`,
+              );
               break;
             }
           }
@@ -312,7 +219,9 @@ app.post("/api/crawl", async (req, res) => {
       await crawlQueue.drop();
     } catch (_) {}
 
-    console.log(`Embedding ${rawChunks.length} chunks...`);
+    console.log(
+      `Crawled ${crawledPages.size} page(s). Embedding ${rawChunks.length} chunks...`,
+    );
     let embeddedChunks = [];
     for (let c of rawChunks) {
       try {
@@ -337,22 +246,22 @@ app.post("/api/crawl", async (req, res) => {
       }
     }
 
+    // Replace active local site while preserving ONLINE_CACHE_FILE for controlled A/B testing
     const normKey = normalizeSiteUrl(url);
-    const index = await readJsonFile(LOCAL_INDEX_FILE);
-    for (const existingKey of Object.keys(index)) {
-      if (normalizeSiteUrl(existingKey) === normKey) {
-        delete index[existingKey];
-      }
-    }
-    index[normKey] = {
-      crawledAt: new Date().toISOString(),
-      chunks: embeddedChunks,
+    const index = {
+      [normKey]: {
+        crawledAt: new Date().toISOString(),
+        pagesCount: crawledPages.size,
+        chunks: embeddedChunks,
+      },
     };
     await writeJsonFile(LOCAL_INDEX_FILE, index);
 
     res.json({
       message: `Successfully crawled site`,
+      url: normKey,
       chunks: embeddedChunks.length,
+      pages: crawledPages.size,
     });
   } catch (error) {
     console.error(`Failed to deep crawl site: ${error.message}`);
@@ -467,13 +376,10 @@ Now do the following:
 ${historyText ? historyText.trim() + "\n" : ""}User's latest query: "${userQuery}"
 Search query:`;
 
-      if (messages.length <= 1) {
-        if (/^(hi|hello|hey|greetings|what can you do|who are you)[!.?]?$/i.test(userQuery.trim())) {
-          requiresSearch = false;
-          searchQuery = "";
-        } else {
-          searchQuery = userQuery;
-        }
+      if (messages.length <= 1 && isTrivialGreeting(userQuery)) {
+        requiresSearch = false;
+        searchQuery = "";
+        console.log(`Intent check: Greeting does not require search.`);
       } else {
         res.write(
           `event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`,
@@ -501,6 +407,7 @@ Search query:`;
         if (rewritten.includes("</think>")) {
           rewritten = rewritten.split("</think>")[1].trim();
         }
+        rewritten = rewritten.split("\n")[0].replace(/^Search query:\s*/i, "").trim();
 
         if (
           rewritten.toUpperCase() === "NO_SEARCH" ||
@@ -632,37 +539,21 @@ CRITICAL RULES FOR EVALUATION:
           stream: false,
         });
         const contentText = (evalRes.message?.content || "").trim();
-        const evalRaw = contentText || (evalRes.message?.thinking || "").trim();
+        const thinkingText = (evalRes.message?.thinking || "").trim();
         console.log(
-          `Evaluator decision: "${contentText}" (thinking: ${evalRes.message?.thinking ? "present" : "none"})`,
+          `Evaluator decision: "${contentText}" (thinking: ${thinkingText ? "present" : "none"})`,
         );
-        const evalText = evalRaw.toUpperCase();
+        const evalDecision = parseEvaluatorResponse(
+          contentText,
+          thinkingText,
+          topK.length,
+        );
 
-        if (evalText.includes("YES")) {
+        if (evalDecision.relevant) {
           console.log(
-            `Agent loop: Cache/Index contained answer on attempt ${attempts}. (${evalText})`,
+            `Agent loop: Cache/Index contained answer on attempt ${attempts}. (indices: ${evalDecision.indices.map((i) => i + 1).join(", ")})`,
           );
-
-          // Identify relevant sources, prioritizing contentText for numbers
-          const relevantIndices = [];
-          const textToParse = contentText.toUpperCase().includes("YES") ? contentText : evalRaw;
-          const matches = textToParse.match(/\d+/g);
-          if (matches) {
-            for (const m of matches) {
-              const idx = parseInt(m, 10) - 1;
-              if (idx >= 0 && idx < topK.length) {
-                relevantIndices.push(idx);
-              }
-            }
-          }
-
-          if (relevantIndices.length > 0) {
-            finalRelevantIndices = relevantIndices;
-          } else {
-            // Fallback if parsing failed but it was YES
-            finalRelevantIndices = [0];
-          }
-
+          finalRelevantIndices = evalDecision.indices;
           foundAnswer = true;
           break;
         }
@@ -706,7 +597,10 @@ New Search Query:`;
         }
 
         const newQueryKey = normalizeQueryKey(currentSearchQuery || userQuery);
-        if (!onlineCache[newQueryKey]) {
+        const hasCachedOnline =
+          Array.isArray(onlineCache[newQueryKey]) &&
+          onlineCache[newQueryKey].length > 0;
+        if (!hasCachedOnline) {
           console.log(
             `Agent loop: Searching web for competitors on query: "${currentSearchQuery}"`,
           );
@@ -720,6 +614,14 @@ New Search Query:`;
               `https://html.duckduckgo.com/html/?q=${encodeURIComponent(currentSearchQuery)}`,
               { headers: { "User-Agent": "Mozilla/5.0" } },
             );
+            if (!searchResp.ok || searchResp.status === 202) {
+              console.warn(
+                `DuckDuckGo search returned HTTP ${searchResp.status} for "${currentSearchQuery}" (possible rate limit or anti-bot challenge).`,
+              );
+              res.write(
+                `event: ${JSON.stringify({ type: "message", content: `Web search returned HTTP ${searchResp.status} (possible rate limit). Continuing...` })}\n\n`,
+              );
+            }
             const html = await searchResp.text();
             const $ = cheerio.load(html);
             $(".result").each((i, el) => {
@@ -738,6 +640,11 @@ New Search Query:`;
                   });
               }
             });
+            if (webChunks.length === 0) {
+              console.warn(
+                `DuckDuckGo returned 0 results for "${currentSearchQuery}". Will not cache empty competitor set.`,
+              );
+            }
           } catch (e) {
             console.error("DuckDuckGo search failed:", e.message);
           }
@@ -834,8 +741,10 @@ New Search Query:`;
               newOnlineChunks.push(newChunk);
             } catch (_) {}
           }
-          onlineCache[newQueryKey] = newOnlineChunks;
-          await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
+          if (newOnlineChunks.length > 0) {
+            onlineCache[newQueryKey] = newOnlineChunks;
+            await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
+          }
         }
       }
     }
@@ -1071,6 +980,26 @@ app.post("/api/clear-history", async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error("Clear history error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/clear-local-index", async (req, res) => {
+  try {
+    await writeJsonFile(LOCAL_INDEX_FILE, {});
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Clear local index error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/clear-web-cache", async (req, res) => {
+  try {
+    await writeJsonFile(ONLINE_CACHE_FILE, {});
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Clear web cache error:", error);
     res.status(500).json({ error: error.message });
   }
 });

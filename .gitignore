@@ -27,3 +27,9 @@ dist-ssr
 # Data and Storage files
 data/*
 storage/*
+
+# Dev documents
+dev-docs/*
+
+# Instructor grading harness & secret prompts (never commit!)
+grading/
