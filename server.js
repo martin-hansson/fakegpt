@@ -105,8 +105,28 @@ async function writeJsonFile(filepath, data) {
 }
 
 // --- COMPETITOR CORPUS SERVICE ---
+async function resolveCorporaDir() {
+  for (const candidate of [CORPORA_DIR, path.join(CORPORA_DIR, "corpora")]) {
+    try {
+      await fs.access(path.join(candidate, "manifest.json"));
+      return candidate;
+    } catch {
+      try {
+        const files = await fs.readdir(candidate);
+        if (files.some((f) => f.endsWith(".json") && f !== "manifest.json")) {
+          return candidate;
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+  return CORPORA_DIR;
+}
+
 async function listAvailableNiches() {
-  const manifestPath = path.join(CORPORA_DIR, "manifest.json");
+  const dir = await resolveCorporaDir();
+  const manifestPath = path.join(dir, "manifest.json");
   try {
     const raw = await fs.readFile(manifestPath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -115,13 +135,13 @@ async function listAvailableNiches() {
     // fallback: scan corpora/*.json
   }
   try {
-    const files = await fs.readdir(CORPORA_DIR);
+    const files = await fs.readdir(dir);
     const niches = [];
     for (const file of files) {
       if (!file.endsWith(".json") || file === "manifest.json") continue;
       try {
         const doc = JSON.parse(
-          await fs.readFile(path.join(CORPORA_DIR, file), "utf-8"),
+          await fs.readFile(path.join(dir, file), "utf-8"),
         );
         if (doc && doc.id && Array.isArray(doc.chunks)) {
           niches.push({
@@ -166,7 +186,8 @@ async function loadNicheCorpusChunks(nicheId) {
     return loadedCorpusCache.get(cacheKey);
   }
 
-  const corpusPath = path.join(CORPORA_DIR, `${nicheId}.json`);
+  const corporaDir = await resolveCorporaDir();
+  const corpusPath = path.join(corporaDir, `${nicheId}.json`);
   let corpusDoc;
   try {
     corpusDoc = JSON.parse(await fs.readFile(corpusPath, "utf-8"));
@@ -185,7 +206,7 @@ async function loadNicheCorpusChunks(nicheId) {
     rawChunks.length > 0
   ) {
     try {
-      const f32Path = path.join(CORPORA_DIR, corpusDoc.embeddingsFile);
+      const f32Path = path.join(corporaDir, corpusDoc.embeddingsFile);
       const buf = await fs.readFile(f32Path);
       const dim = corpusDoc.embeddingDim;
       const flat = new Float32Array(
@@ -413,7 +434,44 @@ async function crawlSiteToChunks(rawUrl) {
   };
 }
 
-// --- INDEX & NICHE SERVICES ---
+// --- HEALTH & INDEX SERVICES ---
+app.get("/api/health", async (req, res) => {
+  const warnings = [];
+  let ollamaReachable = false;
+  let hasGenModel = false;
+  let hasEmbedModel = false;
+
+  try {
+    const listRes = await ollama.list();
+    ollamaReachable = true;
+    const names = (listRes.models || []).map((m) => m.name || m.model || "");
+    const matchesModel = (target) =>
+      names.some((n) => n === target || n === `${target}:latest` || n.startsWith(`${target}:`));
+    hasGenModel = matchesModel(GEN_MODEL);
+    hasEmbedModel = matchesModel(EMBED_MODEL);
+    if (!hasGenModel) warnings.push(`Missing chat model — run: ollama pull ${GEN_MODEL}`);
+    if (!hasEmbedModel) warnings.push(`Missing embedding model — run: ollama pull ${EMBED_MODEL}`);
+  } catch {
+    warnings.push(`Cannot reach Ollama at ${OLLAMA_HOST}. Start Ollama and reload.`);
+  }
+
+  const niches = await listAvailableNiches();
+  if (niches.length === 0) {
+    warnings.push("No competitor corpora found — extract corpora.zip into corpora/.");
+  }
+
+  res.json({
+    ok: warnings.length === 0,
+    ollamaReachable,
+    genModel: GEN_MODEL,
+    embedModel: EMBED_MODEL,
+    hasGenModel,
+    hasEmbedModel,
+    nichesCount: niches.length,
+    warnings,
+  });
+});
+
 app.get("/api/niches", async (req, res) => {
   try {
     const niches = await listAvailableNiches();

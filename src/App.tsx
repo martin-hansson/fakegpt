@@ -71,6 +71,7 @@ function App() {
   const [competitorUrl, setCompetitorUrl] = useState('');
   const [isCrawlingCompetitor, setIsCrawlingCompetitor] = useState(false);
   const [isSwitchingNiche, setIsSwitchingNiche] = useState(false);
+  const [healthWarnings, setHealthWarnings] = useState<string[]>([]);
   const [indexStatus, setIndexStatus] = useState<IndexStatus>({
     localSite: null,
     activeNiche: 'custom',
@@ -79,6 +80,18 @@ function App() {
     customCompetitors: [],
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchHealth = async () => {
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        setHealthWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+      }
+    } catch {
+      setHealthWarnings(['Cannot reach FakeGPT backend on port 3002.']);
+    }
+  };
 
   const fetchIndexStatus = async () => {
     try {
@@ -110,6 +123,7 @@ function App() {
   useEffect(() => {
     fetchChats();
     fetchIndexStatus();
+    fetchHealth();
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
@@ -624,6 +638,14 @@ function App() {
                   <Trash2 size={12} className="hover-text-primary" />
                 </button>
               </div>
+
+              {healthWarnings.length > 0 && (
+                <div style={{ background: 'rgba(210, 153, 34, 0.14)', border: '1px solid rgba(210, 153, 34, 0.45)', borderRadius: '0.5rem', padding: '0.45rem 0.55rem', marginBottom: '0.55rem', fontSize: '0.68rem', color: '#f0b849', lineHeight: 1.35 }}>
+                  {healthWarnings.map((w, i) => (
+                    <div key={i}>⚠ {w}</div>
+                  ))}
+                </div>
+              )}
 
               <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
                 Competitor Niche:

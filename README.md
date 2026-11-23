@@ -37,9 +37,14 @@ ollama pull embeddinggemma
 
 *(Note: Depending on your internet connection, downloading the models may take a few minutes as they are several gigabytes in size).*
 
-If you want to use alternative models, you can override them using environment variables when starting the server:
+If you want to use alternative models (for example, `llama3.2:3b` on slower CPU-only machines), you can override them using environment variables when starting the server:
 ```bash
-GEN_MODEL="llama3.2:3b" EMBED_MODEL="nomic-embed-text" npm run dev
+# Linux / macOS
+GEN_MODEL="llama3.2:3b" EMBED_MODEL="embeddinggemma" npm run dev
+```
+```powershell
+# Windows PowerShell
+$env:GEN_MODEL="llama3.2:3b"; $env:EMBED_MODEL="embeddinggemma"; npm run dev
 ```
 
 ---
