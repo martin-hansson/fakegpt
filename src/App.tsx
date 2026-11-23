@@ -1,17 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, Download, Globe } from 'lucide-react';
+import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, Download, Plus, X } from 'lucide-react';
 import './index.css';
 
+type NicheSummary = {
+  id: string;
+  name: string;
+  description: string;
+  pagesCount: number;
+  chunksCount: number;
+};
+
+type SiteSummary = {
+  url: string;
+  crawledAt: string | null;
+  chunksCount: number;
+  pagesCount: number;
+};
+
 type IndexStatus = {
-  localSite: {
-    url: string;
-    crawledAt: string | null;
-    chunksCount: number;
-    pagesCount: number;
-  } | null;
-  cachedQueriesCount: number;
+  localSite: SiteSummary | null;
+  activeNiche: string;
+  activeNicheInfo: NicheSummary | null;
+  niches: NicheSummary[];
+  customCompetitors: SiteSummary[];
 };
 
 type LoadingMessage = {
@@ -55,7 +68,16 @@ function App() {
   const [editTitle, setEditTitle] = useState('');
   const [menuOpenForId, setMenuOpenForId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
-  const [indexStatus, setIndexStatus] = useState<IndexStatus>({ localSite: null, cachedQueriesCount: 0 });
+  const [competitorUrl, setCompetitorUrl] = useState('');
+  const [isCrawlingCompetitor, setIsCrawlingCompetitor] = useState(false);
+  const [isSwitchingNiche, setIsSwitchingNiche] = useState(false);
+  const [indexStatus, setIndexStatus] = useState<IndexStatus>({
+    localSite: null,
+    activeNiche: 'custom',
+    activeNicheInfo: null,
+    niches: [],
+    customCompetitors: [],
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fetchIndexStatus = async () => {
@@ -312,17 +334,61 @@ function App() {
     }
   };
 
-  const handleClearWebCache = async () => {
+  const handleSelectNiche = async (nicheId: string) => {
+    setIsSwitchingNiche(true);
     try {
-      const res = await fetch('/api/clear-web-cache', { method: 'POST' });
+      const res = await fetch('/api/niches/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nicheId }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to switch niche: ${errData.error || 'Unknown error'}`);
+      }
+      await fetchIndexStatus();
+    } catch (e: any) {
+      alert(`Error switching niche: ${e.message}`);
+    } finally {
+      setIsSwitchingNiche(false);
+    }
+  };
+
+  const handleCrawlCompetitor = async () => {
+    if (!competitorUrl.trim()) return;
+    setIsCrawlingCompetitor(true);
+    try {
+      const res = await fetch('/api/competitors/crawl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: competitorUrl.trim() }),
+      });
       if (res.ok) {
-        fetchIndexStatus();
+        setCompetitorUrl('');
+        await fetchIndexStatus();
       } else {
         const errData = await res.json().catch(() => ({}));
-        console.error(`Failed to clear web cache: ${errData.error || 'Unknown error'}`);
+        alert(`Failed to crawl competitor: ${errData.error || 'Unknown error'}`);
       }
     } catch (e: any) {
-      console.error(`Error clearing web cache: ${e.message}`);
+      alert(`Error crawling competitor: ${e.message}`);
+    } finally {
+      setIsCrawlingCompetitor(false);
+    }
+  };
+
+  const handleRemoveCompetitor = async (url?: string) => {
+    try {
+      const res = await fetch('/api/clear-competitors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(url ? { url } : {}),
+      });
+      if (res.ok) {
+        fetchIndexStatus();
+      }
+    } catch (e: any) {
+      console.error(`Error removing competitor: ${e.message}`);
     }
   };
 
@@ -554,41 +620,84 @@ function App() {
             <div className="geo-settings">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
                 <span>LAB SETTINGS</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <button onClick={handleClearLocalIndex} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Indexed Target Site (keeps web cache)">
-                    <Trash2 size={12} className="hover-text-primary" />
-                  </button>
-                  <button onClick={handleClearWebCache} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Cached Web Competitors">
-                    <Globe size={12} className="hover-text-primary" />
-                  </button>
-                </div>
+                <button onClick={handleClearLocalIndex} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0 }} title="Clear Indexed Target Site">
+                  <Trash2 size={12} className="hover-text-primary" />
+                </button>
               </div>
-              <p style={{fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem'}}>
-                Enter your target website URL (crawling replaces the active site):
+
+              <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                Competitor Niche:
+              </label>
+              <select
+                className="input-field"
+                value={indexStatus.activeNiche}
+                onChange={(e) => handleSelectNiche(e.target.value)}
+                disabled={isSwitchingNiche}
+                style={{ fontSize: '0.78rem', padding: '0.4rem 0.6rem', marginBottom: '0.6rem', cursor: 'pointer' }}
+              >
+                {indexStatus.niches.map((n) => (
+                  <option key={n.id} value={n.id} style={{ background: '#171717', color: '#ececec' }}>
+                    {n.name} ({n.pagesCount}p)
+                  </option>
+                ))}
+                <option value="custom" style={{ background: '#171717', color: '#ececec' }}>
+                  Custom (manual competitor URLs)
+                </option>
+              </select>
+
+              <p style={{fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.35rem'}}>
+                Your site URL or sitemap.xml:
               </p>
-              <div style={{display: 'flex', gap: '0.5rem'}}>
+              <div style={{display: 'flex', gap: '0.4rem'}}>
                 <input 
                   type="text" 
                   className="input-field" 
                   placeholder="https://user.github.io/site/"
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
-                  style={{marginBottom: 0}}
+                  style={{marginBottom: 0, fontSize: '0.78rem'}}
                 />
                 <button 
                   className="crawl-btn" 
                   onClick={handleCrawl}
                   disabled={isCrawling || !targetUrl.trim()}
-                  title="Crawl and replace active site index"
+                  title="Crawl site or sitemap.xml (replaces active target site)"
                 >
                   {crawlSuccess ? <Check size={14} color="var(--text-primary)" /> : <RefreshCw size={14} className={isCrawling ? "spin" : ""} />}
                 </button>
               </div>
-              <div style={{ marginTop: '0.6rem', fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+
+              {indexStatus.activeNiche === 'custom' && (
+                <div style={{ marginTop: '0.6rem' }}>
+                  <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                    Add competitor URL (custom mode):
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="https://competitor.com/"
+                      value={competitorUrl}
+                      onChange={(e) => setCompetitorUrl(e.target.value)}
+                      style={{ marginBottom: 0, fontSize: '0.75rem' }}
+                    />
+                    <button
+                      className="crawl-btn"
+                      onClick={handleCrawlCompetitor}
+                      disabled={isCrawlingCompetitor || !competitorUrl.trim()}
+                      title="Crawl and add competitor URL"
+                    >
+                      {isCrawlingCompetitor ? <RefreshCw size={13} className="spin" /> : <Plus size={13} />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: '0.6rem', fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                 {indexStatus.localSite ? (
                   <>
                     <div style={{ color: '#a371f7', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={indexStatus.localSite.url}>
-                      Indexed: {indexStatus.localSite.url}
+                      Target: {indexStatus.localSite.url}
                     </div>
                     <div>
                       {indexStatus.localSite.pagesCount} {indexStatus.localSite.pagesCount === 1 ? 'page' : 'pages'} · {indexStatus.localSite.chunksCount} {indexStatus.localSite.chunksCount === 1 ? 'chunk' : 'chunks'}
@@ -597,9 +706,31 @@ function App() {
                 ) : (
                   <div>No target site indexed yet</div>
                 )}
-                <div style={{ opacity: 0.8 }}>
-                  Web competitor cache: {indexStatus.cachedQueriesCount} {indexStatus.cachedQueriesCount === 1 ? 'query' : 'queries'}
-                </div>
+
+                {indexStatus.activeNicheInfo && (
+                  <div style={{ opacity: 0.85, marginTop: '0.2rem' }}>
+                    Corpus: {indexStatus.activeNicheInfo.pagesCount} pages · {indexStatus.activeNicheInfo.chunksCount} chunks
+                  </div>
+                )}
+
+                {indexStatus.customCompetitors.length > 0 && (
+                  <div style={{ marginTop: '0.3rem' }}>
+                    {indexStatus.customCompetitors.map((comp) => (
+                      <div key={comp.url} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={comp.url}>
+                          Comp: {comp.url} ({comp.pagesCount}p)
+                        </span>
+                        <button
+                          onClick={() => handleRemoveCompetitor(comp.url)}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, flexShrink: 0 }}
+                          title="Remove competitor"
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </>

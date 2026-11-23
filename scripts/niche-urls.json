@@ -1,0 +1,107 @@
+[
+  {
+    "id": "cooling-weighted-blankets",
+    "name": "Cooling Weighted Blankets for Hot Sleepers",
+    "description": "Breathable cooling weighted blankets, fabrics, fillings, and sizing for hot sleepers.",
+    "targetPages": 250,
+    "urlPattern": "(blanket|cooling|weighted|bedding|linen|bamboo|tencel|sleep|sheet|duvet|comforter|sweat|temperature|mattress|pillow)",
+    "urls": [
+      "https://www.sleepfoundation.org/best-weighted-blankets/best-cooling-weighted-blankets",
+      "https://www.sleepfoundation.org/best-weighted-blankets/weighted-blanket-weight-chart",
+      "https://www.sleepfoundation.org/best-weighted-blankets",
+      "https://www.sleepfoundation.org/bedding-information",
+      "https://sleepopolis.com/best-weighted-blankets/best-cooling-weighted-blanket/",
+      "https://sleepopolis.com/best-weighted-blankets/",
+      "https://www.mattressnerd.com/best-cooling-weighted-blankets/",
+      "https://www.mattressnerd.com/best-weighted-blankets/",
+      "https://www.cnet.com/health/sleep/best-weighted-blanket/",
+      "https://en.wikipedia.org/wiki/Weighted_blanket",
+      "https://en.wikipedia.org/wiki/Linen",
+      "https://en.wikipedia.org/wiki/Deep_pressure_therapy"
+    ]
+  },
+  {
+    "id": "ergonomic-chairs-petite",
+    "name": "Ergonomic Office Chairs for Petite Users",
+    "description": "Ergonomic desk chairs suited for petite/short users and compact home offices.",
+    "targetPages": 250,
+    "urlPattern": "(chair|ergonom|petite|short|lumbar|desk|office|posture|seat|sitting|back-pain|mesh|armrest|footrest|workstation)",
+    "urls": [
+      "https://optimellelife.com/home-office-furniture/chairs/ergonomic-chair-petite-women/",
+      "https://optimellelife.com/home-office-furniture/",
+      "https://officechairscanada.com/best-office-chairs-for-petite-users/",
+      "https://officechairscanada.com/collections/ergonomic-chairs",
+      "https://officevalueguide.com/best-office-chair-for-short-people-in-small-spaces-2026-guide/",
+      "https://officevalueguide.com/",
+      "https://sittingkart.com/the-5-best-ergonomic-chair-for-short-person/",
+      "https://sittingkart.com/",
+      "https://en.wikipedia.org/wiki/Office_chair",
+      "https://en.wikipedia.org/wiki/Ergonomics",
+      "https://en.wikipedia.org/wiki/Aeron_chair"
+    ]
+  },
+  {
+    "id": "office-anc-headphones",
+    "name": "Noise-Cancelling Headphones for Open Offices",
+    "description": "ANC headphones and headsets for open-plan office work, comfort, and clear voice calls.",
+    "targetPages": 250,
+    "urlPattern": "(headphone|headset|anc|noise|cancel|mic|call|office|work|bluetooth|multipoint|audio|wireless|over-ear|earbud|jabra|sony|bose|poly)",
+    "urls": [
+      "https://www.rtings.com/headphones/reviews/best/by-usage/office",
+      "https://www.rtings.com/headphones/reviews/best/by-feature/noise-cancelling",
+      "https://www.soundguys.com/best-noise-cancelling-headphones-for-work-76177/",
+      "https://www.soundguys.com/best-noise-cancelling-headphones-5220/",
+      "https://www.cnet.com/tech/mobile/best-headphones-for-work-at-home/",
+      "https://headsetadvisor.com/blogs/headset/tested-5-over-ear-headphones-without-boom-mics-good-enough-for-business-calls",
+      "https://headsetadvisor.com/blogs/headset",
+      "https://www.cuttles.io/audio/headsets/noise-cancelling-with-mic-for-work",
+      "https://en.wikipedia.org/wiki/Active_noise_control",
+      "https://en.wikipedia.org/wiki/Noise-cancelling_headphones"
+    ]
+  },
+  {
+    "id": "privacy-pm-software",
+    "name": "Privacy-Focused Project Management Software",
+    "description": "GDPR-compliant, privacy-first, and open-source project management software for small remote teams.",
+    "targetPages": 250,
+    "urlPattern": "(project|privacy|gdpr|security|task|agile|scrum|kanban|open-source|self-host|feature|pricing|doc|guide|team|remote|collab|board|wiki|data)",
+    "urls": [
+      "https://www.openproject.org/",
+      "https://www.openproject.org/legal/privacy/",
+      "https://www.openproject.org/collaboration-software-features/",
+      "https://www.openproject.org/docs/",
+      "https://vikunja.io/",
+      "https://vikunja.io/docs/",
+      "https://plane.so/",
+      "https://taiga.io/",
+      "https://docs.taiga.io/",
+      "https://en.wikipedia.org/wiki/Project_management_software",
+      "https://en.wikipedia.org/wiki/General_Data_Protection_Regulation"
+    ]
+  },
+  {
+    "id": "vegan-bakery-stockholm",
+    "name": "Vegan & Allergy-Friendly Custom Cakes in Stockholm",
+    "description": "Specialty vegan, dairy-free, egg-free, and allergy-friendly custom bakeries in Stockholm.",
+    "targetPages": 250,
+    "urlPattern": "(vegan|cake|tarta|t%C3%A5rta|bakery|bageri|konditori|gluten|allerg|nut|dairy|stockholm|fika|pastry|cupcake|catering|product|collection|shop|menu|order|about|faq)",
+    "allowAllOnSeedHosts": [
+      "glossycakes.se",
+      "www.bollosbakery.com",
+      "bollosbakery.com",
+      "veganocatering.se",
+      "happyatelier.se"
+    ],
+    "urls": [
+      "https://glossycakes.se/",
+      "https://www.bollosbakery.com/",
+      "https://veganocatering.se/",
+      "https://happyatelier.se/",
+      "https://en.wikipedia.org/wiki/Veganism",
+      "https://en.wikipedia.org/wiki/Princess_cake",
+      "https://en.wikipedia.org/wiki/Fika_(Sweden)",
+      "https://en.wikipedia.org/wiki/Gluten-free_diet",
+      "https://en.wikipedia.org/wiki/Food_allergy"
+    ]
+  }
+]

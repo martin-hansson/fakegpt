@@ -44,6 +44,11 @@ GEN_MODEL="llama3.2:3b" EMBED_MODEL="nomic-embed-text" npm run dev
 
 ---
 
+### 4. Add the Pre-Crawled Competitor Corpora
+Download the `corpora.zip` bundle from the course page (Athena / DSV) and extract its `.json` and `.f32` files into the `corpora/` folder inside this project. *(Alternatively, instructors can rebuild the corpora directly from `scripts/niche-urls.json` by running `node scripts/build-corpus.mjs`.)*
+
+---
+
 ## Running the Lab
 
 Once all prerequisites are installed, you can start the lab application. For the full student assignment instructions, see [INSTRUCTIONS.md](INSTRUCTIONS.md).
@@ -61,8 +66,8 @@ Once all prerequisites are installed, you can start the lab application. For the
 
 ### Using the Lab Controls
 
-- **Crawling a Target Site (`LAB SETTINGS`):** Enter your site's URL (e.g., `https://user.github.io/geo-lab/before/`) and click the refresh button. Crawling is scoped to that URL's directory prefix (so `/after/` will not crawl `/before/`) and automatically replaces the active local site while preserving cached online competitors for a fair A/B test.
-- **Clear Target Site (trash icon) vs. Clear Web Cache (globe icon):** Use the trash icon to clear only your indexed target site, or the globe icon to wipe cached web search competitors and fetch fresh online results.
+- **Competitor Niche (`LAB SETTINGS`):** Pick your assigned niche from the dropdown to load its pre-crawled real-world competitor corpus (200+ real pages per niche, zero external search rate limits). Select **Custom (manual competitor URLs)** if you are doing real-life GEO outside the curated niches and want to crawl 1–3 competitor URLs manually.
+- **Crawling a Target Site:** Enter your site's URL (e.g., `https://user.github.io/geo-lab/before/`) **or** a direct `sitemap.xml` URL (e.g., `https://user.github.io/geo-lab/after/sitemap.xml`) and click the refresh button. Crawling is scoped strictly to that URL's directory prefix (so `/after/` will not crawl `/before/`) and automatically replaces the active target site while preserving your selected competitor niche.
 - **Export Chat History (download icon next to `Recents`):** Downloads your full chat sessions (including retrieved sources, similarity scores, and evaluator decisions) as a JSON file for submission.
 
 > [!NOTE]
@@ -74,6 +79,6 @@ Once all prerequisites are installed, you can start the lab application. For the
 ## Troubleshooting
 
 - **Server Crash / ECONNREFUSED:** Ensure Ollama is running in the background. If the Node.js server crashes, simply restart it by pressing `Ctrl+C` and running `npm run dev` again.
-- **Crawler 403 Errors:** If you see 403 Forbidden errors in the terminal, it means the website's firewall (like Cloudflare) blocked the automated web crawler. This is normal when scraping the live web. The LLM will fall back to other successful pages.
-- **DuckDuckGo Rate Limits (HTTP 202 / 0 Results):** If many students share the same network (e.g. a computer lab), DuckDuckGo may temporarily rate-limit searches. FakeGPT will not cache empty results — wait a moment and try again, or reuse your already cached competitors between Before and After runs.
-- **Empty Local Index:** Check the `Indexed:` status under `LAB SETTINGS` to verify how many pages and chunks were extracted. If your local cosine similarity scores are unexpectedly low, verify you are using the matching `EMBED_MODEL` (`embeddinggemma` by default) and re-crawl your site.
+- **No Niches in Dropdown:** Ensure you extracted the course `corpora.zip` files (`manifest.json`, `*.json`, `*.f32`) directly into the `corpora/` folder, then refresh the browser.
+- **Crawler 403 Errors:** If you see 403 Forbidden errors when crawling your own hosted site or a custom competitor URL, the hosting platform's firewall (e.g. Cloudflare) blocked the crawler. Prefer plain static HTML on GitHub Pages or DSV student web.
+- **Empty Local Index:** Check the `Target:` status under `LAB SETTINGS` to verify how many pages and chunks were extracted. If you changed `EMBED_MODEL`, re-crawl your site so embeddings match.

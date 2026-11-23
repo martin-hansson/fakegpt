@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>http://localhost:8088/optimized/</loc>
-    <lastmod>2026-10-28</lastmod>
-    <changefreq>daily</changefreq>
-    <priority>1.0</priority>
+    <loc>http://localhost:8088/optimized/index.html</loc>
+    <lastmod>2026-11-20</lastmod>
+  </url>
+  <url>
+    <loc>http://localhost:8088/optimized/materials-cooling.html</loc>
+    <lastmod>2026-11-20</lastmod>
+  </url>
+  <url>
+    <loc>http://localhost:8088/optimized/sizing-guide.html</loc>
+    <lastmod>2026-11-20</lastmod>
+  </url>
+  <url>
+    <loc>http://localhost:8088/optimized/comparison-faq.html</loc>
+    <lastmod>2026-11-20</lastmod>
   </url>
 </urlset>

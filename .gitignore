@@ -33,3 +33,9 @@ dev-docs/*
 
 # Instructor grading harness & secret prompts (never commit!)
 grading/
+
+# Pre-crawled real competitor corpora (distributed separately via DSV)
+corpora/*.json
+corpora/*.f32
+
+

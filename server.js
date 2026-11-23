@@ -1,16 +1,18 @@
 import express from "express";
 import cors from "cors";
-import * as cheerio from "cheerio";
 import { Ollama } from "ollama";
 import fs from "fs/promises";
 import path from "path";
 import { CheerioCrawler, RequestQueue } from "crawlee";
 import {
   cosineSimilarity,
-  normalizeQueryKey,
   normalizeSiteUrl,
+  canonicalizeCrawlUrl,
+  selectDiverseTopK,
   getSitePrefix,
   isUrlWithinPrefix,
+  isSitemapUrl,
+  parseSitemapUrls,
   getSitemapCandidates,
   extractChunksFromHtml,
   parseEvaluatorResponse,
@@ -37,8 +39,15 @@ if (DATA_DIR === "/data") {
   DATA_DIR = path.join(os.homedir(), ".chatlab_data");
 }
 const LOCAL_INDEX_FILE = path.join(DATA_DIR, "local_index.json");
-const ONLINE_CACHE_FILE = path.join(DATA_DIR, "index.json");
+const CUSTOM_COMPETITORS_FILE = path.join(DATA_DIR, "custom_competitors.json");
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const CHATS_FILE = path.join(DATA_DIR, "chats.json");
+const CORPORA_DIR =
+  global.CORPORA_DIR ||
+  process.env.CORPORA_DIR ||
+  path.join(process.cwd(), "corpora");
+
+const loadedCorpusCache = new Map();
 
 import fsSync from "fs";
 if (!fsSync.existsSync(DATA_DIR)) {
@@ -66,21 +75,18 @@ const SIMILARITY_THRESHOLD = 0.1;
 async function initDataStorage() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch (e) {}
-  try {
-    await fs.access(LOCAL_INDEX_FILE);
-  } catch (e) {
-    await fs.writeFile(LOCAL_INDEX_FILE, JSON.stringify({}));
-  }
-  try {
-    await fs.access(ONLINE_CACHE_FILE);
-  } catch (e) {
-    await fs.writeFile(ONLINE_CACHE_FILE, JSON.stringify({}));
-  }
-  try {
-    await fs.access(CHATS_FILE);
-  } catch (e) {
-    await fs.writeFile(CHATS_FILE, JSON.stringify([]));
+  } catch {}
+  for (const [file, fallback] of [
+    [LOCAL_INDEX_FILE, {}],
+    [CUSTOM_COMPETITORS_FILE, {}],
+    [SETTINGS_FILE, { activeNiche: null }],
+    [CHATS_FILE, []],
+  ]) {
+    try {
+      await fs.access(file);
+    } catch {
+      await fs.writeFile(file, JSON.stringify(fallback));
+    }
   }
 }
 initDataStorage();
@@ -89,16 +95,8 @@ initDataStorage();
 async function readJsonFile(filepath) {
   try {
     const data = await fs.readFile(filepath, "utf-8");
-    const parsed = JSON.parse(data);
-    if (filepath === ONLINE_CACHE_FILE && parsed && typeof parsed === "object") {
-      // Migrate legacy cache where keys were URLs rather than search queries
-      const firstKey = Object.keys(parsed)[0];
-      if (firstKey && (firstKey.startsWith("http://") || firstKey.startsWith("https://"))) {
-        return {};
-      }
-    }
-    return parsed;
-  } catch (e) {
+    return JSON.parse(data);
+  } catch {
     return filepath === CHATS_FILE ? [] : {};
   }
 }
@@ -106,11 +104,364 @@ async function writeJsonFile(filepath, data) {
   await fs.writeFile(filepath, JSON.stringify(data, null, 2));
 }
 
-// --- INDEX SERVICE ---
+// --- COMPETITOR CORPUS SERVICE ---
+async function listAvailableNiches() {
+  const manifestPath = path.join(CORPORA_DIR, "manifest.json");
+  try {
+    const raw = await fs.readFile(manifestPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // fallback: scan corpora/*.json
+  }
+  try {
+    const files = await fs.readdir(CORPORA_DIR);
+    const niches = [];
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === "manifest.json") continue;
+      try {
+        const doc = JSON.parse(
+          await fs.readFile(path.join(CORPORA_DIR, file), "utf-8"),
+        );
+        if (doc && doc.id && Array.isArray(doc.chunks)) {
+          niches.push({
+            id: doc.id,
+            name: doc.name || doc.id,
+            description: doc.description || "",
+            pagesCount: doc.pagesCount || 0,
+            chunksCount: doc.chunks.length,
+            embedModel: doc.embedModel || null,
+            file,
+          });
+        }
+      } catch {
+        // skip unreadable json
+      }
+    }
+    return niches;
+  } catch {
+    return [];
+  }
+}
+
+async function getActiveNicheId() {
+  const settings = await readJsonFile(SETTINGS_FILE);
+  if (settings && settings.activeNiche) {
+    return settings.activeNiche;
+  }
+  const niches = await listAvailableNiches();
+  if (niches.length > 0) {
+    const firstId = niches[0].id;
+    await writeJsonFile(SETTINGS_FILE, { activeNiche: firstId });
+    return firstId;
+  }
+  return "custom";
+}
+
+async function loadNicheCorpusChunks(nicheId) {
+  if (!nicheId || nicheId === "custom") return [];
+
+  const cacheKey = `${nicheId}::${EMBED_MODEL}`;
+  if (loadedCorpusCache.has(cacheKey)) {
+    return loadedCorpusCache.get(cacheKey);
+  }
+
+  const corpusPath = path.join(CORPORA_DIR, `${nicheId}.json`);
+  let corpusDoc;
+  try {
+    corpusDoc = JSON.parse(await fs.readFile(corpusPath, "utf-8"));
+  } catch {
+    console.warn(`Corpus file not found for niche "${nicheId}" at ${corpusPath}`);
+    return [];
+  }
+
+  const rawChunks = Array.isArray(corpusDoc.chunks) ? corpusDoc.chunks : [];
+
+  // Fast path 1: companion binary Float32Array file (.f32) matching EMBED_MODEL
+  if (
+    corpusDoc.embedModel === EMBED_MODEL &&
+    corpusDoc.embeddingsFile &&
+    corpusDoc.embeddingDim > 0 &&
+    rawChunks.length > 0
+  ) {
+    try {
+      const f32Path = path.join(CORPORA_DIR, corpusDoc.embeddingsFile);
+      const buf = await fs.readFile(f32Path);
+      const dim = corpusDoc.embeddingDim;
+      const flat = new Float32Array(
+        buf.buffer,
+        buf.byteOffset,
+        Math.floor(buf.byteLength / 4),
+      );
+      if (flat.length >= rawChunks.length * dim) {
+        const mapped = rawChunks.map((c, idx) => ({
+          chunk: c.chunk,
+          embedding: flat.subarray(idx * dim, (idx + 1) * dim),
+          source: c.source,
+          title: c.title,
+          isLocal: false,
+        }));
+        loadedCorpusCache.set(cacheKey, mapped);
+        console.log(
+          `Loaded binary corpus "${nicheId}" (${mapped.length} chunks, dim=${dim})`,
+        );
+        return mapped;
+      }
+    } catch (err) {
+      console.warn(
+        `Could not load binary embeddings ${corpusDoc.embeddingsFile}: ${err.message}`,
+      );
+    }
+  }
+
+  // Fast path 2: inline JSON embeddings matching EMBED_MODEL
+  const hasMatchingEmbeddings =
+    corpusDoc.embedModel === EMBED_MODEL &&
+    rawChunks.length > 0 &&
+    Array.isArray(rawChunks[0].embedding);
+
+  if (hasMatchingEmbeddings) {
+    const mapped = rawChunks.map((c) => ({
+      chunk: c.chunk,
+      embedding: c.embedding,
+      source: c.source,
+      title: c.title,
+      isLocal: false,
+    }));
+    loadedCorpusCache.set(cacheKey, mapped);
+    return mapped;
+  }
+
+  // Fallback: check disk cache for re-embedded binary corpus matching current EMBED_MODEL
+  const safeModel = EMBED_MODEL.replace(/[^a-z0-9_-]/gi, "_");
+  const diskF32Path = path.join(DATA_DIR, `corpus_${nicheId}_${safeModel}.f32`);
+  const diskMetaPath = path.join(DATA_DIR, `corpus_${nicheId}_${safeModel}.meta.json`);
+  try {
+    const meta = JSON.parse(await fs.readFile(diskMetaPath, "utf-8"));
+    const buf = await fs.readFile(diskF32Path);
+    const flat = new Float32Array(
+      buf.buffer,
+      buf.byteOffset,
+      Math.floor(buf.byteLength / 4),
+    );
+    if (meta.count === rawChunks.length && meta.dim > 0 && flat.length >= meta.count * meta.dim) {
+      const mapped = rawChunks.map((c, idx) => ({
+        chunk: c.chunk,
+        embedding: flat.subarray(idx * meta.dim, (idx + 1) * meta.dim),
+        source: c.source,
+        title: c.title,
+        isLocal: false,
+      }));
+      loadedCorpusCache.set(cacheKey, mapped);
+      return mapped;
+    }
+  } catch {
+    // needs embedding
+  }
+
+  console.log(
+    `Batch-embedding ${rawChunks.length} competitor chunks for niche "${nicheId}" with ${EMBED_MODEL}...`,
+  );
+  const vectors = [];
+  let dim = 0;
+  const batchSize = 32;
+  for (let i = 0; i < rawChunks.length; i += batchSize) {
+    const batch = rawChunks.slice(i, i + batchSize);
+    const inputs = batch.map((c) => `${c.title || ""}\n${c.chunk}`.slice(0, 1200));
+    const embRes = await ollama.embed({ model: EMBED_MODEL, input: inputs });
+    for (const vec of embRes.embeddings) {
+      if (!dim) dim = vec.length;
+      vectors.push(vec);
+    }
+  }
+  const flat = new Float32Array(vectors.length * dim);
+  for (let i = 0; i < vectors.length; i++) flat.set(vectors[i], i * dim);
+  await fs.writeFile(
+    diskF32Path,
+    Buffer.from(flat.buffer, flat.byteOffset, flat.byteLength),
+  );
+  await writeJsonFile(diskMetaPath, { count: rawChunks.length, dim, embedModel: EMBED_MODEL });
+
+  const mapped = rawChunks.map((c, idx) => ({
+    chunk: c.chunk,
+    embedding: flat.subarray(idx * dim, (idx + 1) * dim),
+    source: c.source,
+    title: c.title,
+    isLocal: false,
+  }));
+  loadedCorpusCache.set(cacheKey, mapped);
+  return mapped;
+}
+
+async function crawlSiteToChunks(rawUrl) {
+  const sitePrefix = getSitePrefix(rawUrl);
+  const rawChunks = [];
+  const crawledPages = new Set();
+
+  let startUrls = [];
+  if (isSitemapUrl(rawUrl)) {
+    const smRes = await fetch(rawUrl, { signal: AbortSignal.timeout(5000) });
+    if (!smRes.ok) {
+      throw new Error(`Could not fetch sitemap ${rawUrl} (HTTP ${smRes.status})`);
+    }
+    const smXml = await smRes.text();
+    startUrls = parseSitemapUrls(smXml, sitePrefix, rawUrl);
+    if (startUrls.length === 0) {
+      throw new Error(
+        `No valid <loc> URLs found inside sitemap ${rawUrl} matching prefix ${sitePrefix}`,
+      );
+    }
+    console.log(
+      `Loaded sitemap directly from ${rawUrl} (${startUrls.length} matching URLs)`,
+    );
+  } else {
+    startUrls = [rawUrl];
+    try {
+      const sitemapCandidates = getSitemapCandidates(rawUrl);
+      for (const smUrl of sitemapCandidates) {
+        try {
+          const smRes = await fetch(smUrl, { signal: AbortSignal.timeout(2500) });
+          if (smRes.ok) {
+            const smXml = await smRes.text();
+            const parsedUrls = parseSitemapUrls(smXml, sitePrefix, rawUrl);
+            let addedCount = 0;
+            for (const loc of parsedUrls) {
+              if (!startUrls.includes(loc)) {
+                startUrls.push(loc);
+                addedCount++;
+              }
+            }
+            if (parsedUrls.length > 0) {
+              console.log(
+                `Discovered sitemap at ${smUrl} (${addedCount} additional URLs)`,
+              );
+              break;
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const crawledCanonical = new Set();
+  const crawlQueue = await RequestQueue.open(
+    `crawl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  );
+  const crawler = new CheerioCrawler({
+    requestQueue: crawlQueue,
+    maxRequestsPerCrawl: 20, // Safe limit for lab
+    async requestHandler({ request, $, enqueueLinks, log }) {
+      const canonUrl = canonicalizeCrawlUrl(request.loadedUrl || request.url);
+      if (crawledCanonical.has(canonUrl)) {
+        log.info(`Skipping duplicate canonical page: ${request.url}`);
+        return;
+      }
+      log.info(`Crawling: ${request.url}`);
+      crawledCanonical.add(canonUrl);
+      crawledPages.add(request.url);
+
+      // Enqueue links strictly within the submitted site's path prefix
+      await enqueueLinks({
+        strategy: "same-origin",
+        transformRequestFunction(req) {
+          if (!isUrlWithinPrefix(req.url, sitePrefix, rawUrl)) return false;
+          if (crawledCanonical.has(canonicalizeCrawlUrl(req.url))) return false;
+          return req;
+        },
+      });
+
+      const { chunks } = extractChunksFromHtml($.html(), request.url);
+      rawChunks.push(...chunks);
+    },
+  });
+
+  console.log(`Starting crawler for ${rawUrl} (prefix: ${sitePrefix})...`);
+  await crawler.run(startUrls);
+  try {
+    await crawlQueue.drop();
+  } catch {}
+
+  console.log(
+    `Crawled ${crawledPages.size} page(s). Embedding ${rawChunks.length} chunks...`,
+  );
+  const embeddedChunks = [];
+  for (const c of rawChunks) {
+    try {
+      const embeddingRes = await ollama.embeddings({
+        model: EMBED_MODEL,
+        prompt: `${c.title}\n${c.text}`,
+      });
+      embeddedChunks.push({
+        chunk: c.text,
+        source: c.url,
+        title: c.title,
+        embedding: embeddingRes.embedding,
+      });
+    } catch (e) {
+      console.error(`Embedding failed with ${EMBED_MODEL}:`, e.message);
+      throw new Error(
+        `Embedding model failed. Make sure to run: ollama pull ${EMBED_MODEL}`,
+      );
+    }
+  }
+
+  const normKey = normalizeSiteUrl(isSitemapUrl(rawUrl) ? sitePrefix : rawUrl);
+  return {
+    normKey,
+    pagesCount: crawledPages.size,
+    chunks: embeddedChunks,
+  };
+}
+
+// --- INDEX & NICHE SERVICES ---
+app.get("/api/niches", async (req, res) => {
+  try {
+    const niches = await listAvailableNiches();
+    const activeNiche = await getActiveNicheId();
+    res.json({ niches, activeNiche });
+  } catch (error) {
+    console.error("Failed to list niches:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/niches/select", async (req, res) => {
+  const { nicheId } = req.body || {};
+  if (!nicheId) return res.status(400).json({ error: "nicheId is required" });
+
+  try {
+    if (nicheId !== "custom") {
+      const niches = await listAvailableNiches();
+      const match = niches.find((n) => n.id === nicheId);
+      if (!match) {
+        return res.status(404).json({ error: `Unknown niche: ${nicheId}` });
+      }
+      await writeJsonFile(SETTINGS_FILE, { activeNiche: nicheId });
+      const chunks = await loadNicheCorpusChunks(nicheId);
+      return res.json({
+        activeNiche: nicheId,
+        name: match.name,
+        pagesCount: match.pagesCount,
+        chunksCount: chunks.length,
+      });
+    }
+
+    await writeJsonFile(SETTINGS_FILE, { activeNiche: "custom" });
+    res.json({ activeNiche: "custom", pagesCount: 0, chunksCount: 0 });
+  } catch (error) {
+    console.error("Failed to select niche:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/index-status", async (req, res) => {
   try {
     const localIndex = await readJsonFile(LOCAL_INDEX_FILE);
-    const onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
+    const customCompetitorsRaw = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+    const niches = await listAvailableNiches();
+    const activeNiche = await getActiveNicheId();
+    const activeNicheInfo =
+      niches.find((n) => n.id === activeNiche) || null;
 
     const siteKeys = Object.keys(localIndex || {});
     let localSite = null;
@@ -130,11 +481,28 @@ app.get("/api/index-status", async (req, res) => {
       };
     }
 
-    const cachedQueriesCount = Object.values(onlineCache || {}).filter(
-      (v) => Array.isArray(v) && v.length > 0,
-    ).length;
+    const customCompetitors = Object.entries(customCompetitorsRaw || {}).map(
+      ([url, entry]) => {
+        const chunks = Array.isArray(entry?.chunks) ? entry.chunks : [];
+        return {
+          url,
+          crawledAt: entry?.crawledAt || null,
+          chunksCount: chunks.length,
+          pagesCount:
+            typeof entry?.pagesCount === "number"
+              ? entry.pagesCount
+              : new Set(chunks.map((c) => c.source).filter(Boolean)).size,
+        };
+      },
+    );
 
-    res.json({ localSite, cachedQueriesCount });
+    res.json({
+      localSite,
+      activeNiche,
+      activeNicheInfo,
+      niches,
+      customCompetitors,
+    });
   } catch (error) {
     console.error("Failed to read index status:", error);
     res.status(500).json({ error: error.message });
@@ -146,125 +514,64 @@ app.post("/api/crawl", async (req, res) => {
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
-    console.log(`Starting deep crawl for ${url}...`);
-
-    let sitePrefix;
     try {
-      sitePrefix = getSitePrefix(url);
-    } catch (e) {
+      new URL(url);
+    } catch {
       return res.status(400).json({ error: "Invalid URL format" });
     }
 
-    let rawChunks = [];
-    const crawledPages = new Set();
+    const result = await crawlSiteToChunks(url);
 
-    const crawlQueue = await RequestQueue.open(
-      `crawl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    );
-    const crawler = new CheerioCrawler({
-      requestQueue: crawlQueue,
-      maxRequestsPerCrawl: 20, // Safe limit for lab
-      async requestHandler({ request, $, enqueueLinks, log }) {
-        log.info(`Crawling: ${request.url}`);
-        crawledPages.add(request.url);
-
-        // Enqueue links strictly within the submitted site's path prefix
-        await enqueueLinks({
-          strategy: "same-origin",
-          transformRequestFunction(req) {
-            return isUrlWithinPrefix(req.url, sitePrefix, url) ? req : false;
-          },
-        });
-
-        const { chunks } = extractChunksFromHtml($.html(), request.url);
-        rawChunks = rawChunks.concat(chunks);
-      },
-    });
-
-    console.log(`Starting crawler for ${url} (prefix: ${sitePrefix})...`);
-    const startUrls = [url];
-    try {
-      const sitemapCandidates = getSitemapCandidates(url);
-      for (const smUrl of sitemapCandidates) {
-        try {
-          const smRes = await fetch(smUrl, { signal: AbortSignal.timeout(2000) });
-          if (smRes.ok) {
-            const smXml = await smRes.text();
-            const locMatches = smXml.match(/<loc>(.*?)<\/loc>/gi);
-            if (locMatches) {
-              let addedCount = 0;
-              for (const locTag of locMatches) {
-                const loc = locTag.replace(/<\/?loc>/gi, "").trim();
-                if (
-                  loc &&
-                  isUrlWithinPrefix(loc, sitePrefix, url) &&
-                  !startUrls.includes(loc)
-                ) {
-                  startUrls.push(loc);
-                  addedCount++;
-                }
-              }
-              console.log(
-                `Discovered sitemap at ${smUrl} (${addedCount} matching URLs)`,
-              );
-              break;
-            }
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-
-    await crawler.run(startUrls);
-    try {
-      await crawlQueue.drop();
-    } catch (_) {}
-
-    console.log(
-      `Crawled ${crawledPages.size} page(s). Embedding ${rawChunks.length} chunks...`,
-    );
-    let embeddedChunks = [];
-    for (let c of rawChunks) {
-      try {
-        let embeddingRes = await ollama.embeddings({
-          model: EMBED_MODEL,
-          prompt: `${c.title}\n${c.text}`,
-        });
-        embeddedChunks.push({
-          chunk: c.text,
-          source: c.url,
-          title: c.title,
-          embedding: embeddingRes.embedding,
-        });
-      } catch (e) {
-        console.error(
-          `Embedding failed with ${EMBED_MODEL}:`,
-          e.message,
-        );
-        throw new Error(
-          `Embedding model failed. Make sure to run: ollama pull ${EMBED_MODEL}`,
-        );
-      }
-    }
-
-    // Replace active local site while preserving ONLINE_CACHE_FILE for controlled A/B testing
-    const normKey = normalizeSiteUrl(url);
+    // Replace active local site while preserving active niche & custom competitors
     const index = {
-      [normKey]: {
+      [result.normKey]: {
         crawledAt: new Date().toISOString(),
-        pagesCount: crawledPages.size,
-        chunks: embeddedChunks,
+        pagesCount: result.pagesCount,
+        chunks: result.chunks,
       },
     };
     await writeJsonFile(LOCAL_INDEX_FILE, index);
 
     res.json({
       message: `Successfully crawled site`,
-      url: normKey,
-      chunks: embeddedChunks.length,
-      pages: crawledPages.size,
+      url: result.normKey,
+      chunks: result.chunks.length,
+      pages: result.pagesCount,
     });
   } catch (error) {
     console.error(`Failed to deep crawl site: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/competitors/crawl", async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: "URL is required" });
+
+  try {
+    try {
+      new URL(url);
+    } catch {
+      return res.status(400).json({ error: "Invalid URL format" });
+    }
+
+    const result = await crawlSiteToChunks(url);
+    const competitors = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+    competitors[result.normKey] = {
+      crawledAt: new Date().toISOString(),
+      pagesCount: result.pagesCount,
+      chunks: result.chunks,
+    };
+    await writeJsonFile(CUSTOM_COMPETITORS_FILE, competitors);
+
+    res.json({
+      message: `Successfully crawled competitor site`,
+      url: result.normKey,
+      chunks: result.chunks.length,
+      pages: result.pagesCount,
+    });
+  } catch (error) {
+    console.error(`Failed to crawl competitor site: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });
@@ -387,38 +694,53 @@ Search query:`;
         const rewriteRes = await ollama.chat({
           model: model,
           messages: [{ role: "user", content: rewritePrompt }],
-          stream: true,
-          think: false, // Smaller thinking models overthink too much
-          options: { num_predict: 50 },
+          stream: false,
+          think: false,
+          format: {
+            type: "object",
+            properties: {
+              requires_search: { type: "boolean" },
+              search_query: { type: "string" },
+            },
+            required: ["requires_search", "search_query"],
+          },
+          options: { temperature: 0, num_predict: 80 },
         });
 
-        let rewritten = "";
-        for await (const chunk of rewriteRes) {
-          if (chunk.message.thinking) {
-            res.write(
-              `data: ${JSON.stringify({ thinking: chunk.message.thinking })}\n\n`,
-            );
-          } else if (chunk.message.content) {
-            rewritten += chunk.message.content;
+        const rawRewrite = (rewriteRes.message?.content || "").trim();
+        let parsedRewrite = null;
+        try {
+          parsedRewrite = JSON.parse(rawRewrite);
+        } catch {}
+
+        if (parsedRewrite && typeof parsedRewrite.requires_search === "boolean") {
+          if (!parsedRewrite.requires_search) {
+            requiresSearch = false;
+            searchQuery = "";
+            console.log(`Intent check: Query does not require search.`);
+          } else if (
+            parsedRewrite.search_query &&
+            parsedRewrite.search_query.trim().length < 150
+          ) {
+            searchQuery = parsedRewrite.search_query.trim();
+            console.log(`Rewrote query for search: "${searchQuery}"`);
           }
-        }
-
-        rewritten = rewritten.replace(/["']/g, "").trim();
-        if (rewritten.includes("</think>")) {
-          rewritten = rewritten.split("</think>")[1].trim();
-        }
-        rewritten = rewritten.split("\n")[0].replace(/^Search query:\s*/i, "").trim();
-
-        if (
-          rewritten.toUpperCase() === "NO_SEARCH" ||
-          rewritten.toUpperCase() === "IGNORE_SEARCH"
-        ) {
-          requiresSearch = false;
-          searchQuery = "";
-          console.log(`Intent check: Query does not require search.`);
-        } else if (rewritten && rewritten.length < 150) {
-          searchQuery = rewritten;
-          console.log(`Rewrote query for search: "${searchQuery}"`);
+        } else {
+          const rewritten = rawRewrite
+            .replace(/["']/g, "")
+            .split("\n")[0]
+            .replace(/^Search query:\s*/i, "")
+            .trim();
+          if (
+            rewritten.toUpperCase() === "NO_SEARCH" ||
+            rewritten.toUpperCase() === "IGNORE_SEARCH"
+          ) {
+            requiresSearch = false;
+            searchQuery = "";
+          } else if (rewritten && rewritten.length < 150) {
+            searchQuery = rewritten;
+            console.log(`Rewrote query for search: "${searchQuery}"`);
+          }
         }
       }
     } catch (e) {
@@ -428,20 +750,22 @@ Search query:`;
       );
     }
 
-    // 1. Agentic Search Loop
+    // 1. Offline / Corpus-Backed RAG Search Loop (No external search engine rate limits)
     let combinedIndices = [];
-    let onlineCache = {};
     let localChunks = [];
+    let competitorChunks = [];
     if (requiresSearch) {
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
-      onlineCache = await readJsonFile(ONLINE_CACHE_FILE);
+      const customCompetitors = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+      const activeNiche = await getActiveNicheId();
 
       res.write(
-        `event: ${JSON.stringify({ type: "message", content: `Searching for "${searchQuery}"...` })}\n\n`,
+        `event: ${JSON.stringify({ type: "message", content: `Searching index for "${searchQuery}"...` })}\n\n`,
       );
-      // Load local chunks
-      for (const key of Object.keys(localCheck)) {
-        if (localCheck[key].chunks) {
+
+      // Load student's target site chunks
+      for (const key of Object.keys(localCheck || {})) {
+        if (Array.isArray(localCheck[key]?.chunks)) {
           const local = localCheck[key].chunks.map((c) => {
             let actualSource = c.source || key;
             let actualChunk = c.chunk;
@@ -463,10 +787,39 @@ Search query:`;
           localChunks = localChunks.concat(local);
         }
       }
+
+      // Load pre-crawled niche competitor corpus (if active)
+      if (activeNiche && activeNiche !== "custom") {
+        try {
+          const nicheChunks = await loadNicheCorpusChunks(activeNiche);
+          competitorChunks = competitorChunks.concat(nicheChunks);
+        } catch (err) {
+          console.error(`Failed to load corpus "${activeNiche}":`, err.message);
+        }
+      }
+
+      // Load any optional manually-crawled custom competitors
+      for (const key of Object.keys(customCompetitors || {})) {
+        if (Array.isArray(customCompetitors[key]?.chunks)) {
+          const custom = customCompetitors[key].chunks.map((c) => ({
+            chunk: c.chunk,
+            embedding: c.embedding,
+            source: c.source || key,
+            title: c.title,
+            isLocal: false,
+          }));
+          competitorChunks = competitorChunks.concat(custom);
+        }
+      }
+
+      combinedIndices = [...localChunks, ...competitorChunks];
+      console.log(
+        `Search pool: ${localChunks.length} target chunks + ${competitorChunks.length} competitor chunks (niche: ${activeNiche})`,
+      );
     }
 
     let attempts = 0;
-    let maxAttempts = requiresSearch ? 3 : 1;
+    let maxAttempts = requiresSearch ? 2 : 1;
     let foundAnswer = !requiresSearch;
     let currentSearchQuery = searchQuery;
     let queriesAttempted = requiresSearch && searchQuery ? [searchQuery] : [];
@@ -474,13 +827,8 @@ Search query:`;
     let topK = [];
     let finalRelevantIndices = null;
 
-    while (attempts < maxAttempts && !foundAnswer) {
+    while (attempts < maxAttempts && !foundAnswer && combinedIndices.length > 0) {
       attempts++;
-      const currentQueryKey = normalizeQueryKey(currentSearchQuery || userQuery);
-      const cachedCompetitors = Array.isArray(onlineCache[currentQueryKey])
-        ? onlineCache[currentQueryKey]
-        : [];
-      combinedIndices = [...localChunks, ...cachedCompetitors];
       let qEmbed = null;
       try {
         qEmbed = await ollama.embeddings({
@@ -492,33 +840,24 @@ Search query:`;
         break;
       }
 
-      let queryEmbedding = qEmbed.embedding;
+      const queryEmbedding = qEmbed.embedding;
 
-      // Score combinedIndices
-      for (let item of combinedIndices) {
-        let rawSim = cosineSimilarity(queryEmbedding, item.embedding);
-        let rankPenalty = item.rank ? item.rank * 0.02 : 0; // Rank penalty for SEO simulation
-        item.similarity = rawSim - rankPenalty;
+      // Score combinedIndices fairly (same chunking & embedding model across target + competitors)
+      for (const item of combinedIndices) {
+        item.similarity = cosineSimilarity(queryEmbedding, item.embedding);
       }
       combinedIndices.sort((a, b) => b.similarity - a.similarity);
 
-      topK = combinedIndices.slice(0, 5);
-      let contextText = topK
+      topK = selectDiverseTopK(combinedIndices, 5, 2);
+      const contextText = topK
         .map((c, i) => `[[${i + 1}]] ${c.title || c.source}\n${c.chunk}`)
         .join("\n\n");
 
-      let hasOnlineSource = topK.some((c) => !c.isLocal);
-      let skipEval =
-        attempts === 1 &&
-        topK.length > 0 &&
-        !hasOnlineSource &&
-        cachedCompetitors.length === 0;
-
       // Evaluate if context has answer
       res.write(
-        `event: ${JSON.stringify({ type: "message", content: `Evaluating search results...` })}\n\n`,
+        `event: ${JSON.stringify({ type: "message", content: `Evaluating retrieved snippets...` })}\n\n`,
       );
-      if (!skipEval && contextText.trim().length > 0) {
+      if (contextText.trim().length > 0) {
         const evalPrompt = `You are a strict relevance evaluator for a search engine.
 Context:
 ${contextText}
@@ -526,225 +865,105 @@ ${contextText}
 Question: "${currentSearchQuery}"
 (Original User Input: "${userQuery}")
 
-Determine if the Context contains relevant factual information that directly addresses the Question.
-CRITICAL RULES FOR EVALUATION:
-1. Read the full text of each source carefully. Crawled snippets often start with navigation links, headers, or metadata, but contain relevant content further in the text.
-2. A source is relevant if it contains facts, descriptions, data, or answers that help address what is asked in the Question.
-3. Completely off-topic or irrelevant sources must NOT be included in your answer.
-4. If NO sources are relevant, reply EXACTLY with 'NO'.
-5. If ANY sources are relevant, reply 'YES' followed by a comma-separated list of the specific source numbers (e.g. YES: 1, 3) that are ACTUALLY relevant to the question.`;
+Return JSON with "relevant_sources": an array of 1-based source numbers (from 1 to ${topK.length}) that contain factual information, specifications, descriptions, or answers directly relevant to the Question. Exclude completely off-topic or vague filler sources. Return an empty array [] if none are relevant.`;
         const evalRes = await ollama.chat({
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
           stream: false,
+          think: false,
+          format: {
+            type: "object",
+            properties: {
+              relevant_sources: {
+                type: "array",
+                items: { type: "integer" },
+              },
+            },
+            required: ["relevant_sources"],
+          },
+          options: { temperature: 0, num_predict: 60 },
         });
         const contentText = (evalRes.message?.content || "").trim();
         const thinkingText = (evalRes.message?.thinking || "").trim();
-        console.log(
-          `Evaluator decision: "${contentText}" (thinking: ${thinkingText ? "present" : "none"})`,
-        );
-        const evalDecision = parseEvaluatorResponse(
-          contentText,
-          thinkingText,
-          topK.length,
-        );
+        console.log(`Evaluator decision: ${contentText}`);
+
+        let evalDecision = { relevant: false, indices: [] };
+        try {
+          const parsed = JSON.parse(contentText);
+          if (parsed && Array.isArray(parsed.relevant_sources)) {
+            const seen = new Set();
+            const indices = [];
+            for (const n of parsed.relevant_sources) {
+              const idx = Number(n) - 1;
+              if (Number.isInteger(idx) && idx >= 0 && idx < topK.length && !seen.has(idx)) {
+                seen.add(idx);
+                indices.push(idx);
+              }
+            }
+            evalDecision = { relevant: indices.length > 0, indices };
+          }
+        } catch {
+          evalDecision = parseEvaluatorResponse(
+            contentText,
+            thinkingText,
+            topK.length,
+          );
+        }
 
         if (evalDecision.relevant) {
           console.log(
-            `Agent loop: Cache/Index contained answer on attempt ${attempts}. (indices: ${evalDecision.indices.map((i) => i + 1).join(", ")})`,
+            `Agent loop: Index contained answer on attempt ${attempts}. (indices: ${evalDecision.indices.map((i) => i + 1).join(", ")})`,
           );
           finalRelevantIndices = evalDecision.indices;
           foundAnswer = true;
           break;
         }
-      } else if (skipEval) {
-        console.log(
-          `Agent loop: Skipping evaluation on attempt 1 because topK only contains local sources. Forcing web search for competition.`,
-        );
       }
 
+      // Retry once with a broader / reformulated query if attempt 1 was rejected
       if (attempts < maxAttempts) {
-        // Generate new query if we already tried once and the evaluation failed
-        if (attempts > 1) {
-          res.write(
-            `event: ${JSON.stringify({ type: "message", content: `Searching some more...` })}\n\n`,
-          );
-          let locationHint = userLocation
-            ? ` If the user is asking for local information, make sure to include their location (${userLocation}) in the new search query.`
-            : "";
-          const newQueryPrompt = `The search query "${currentSearchQuery}" did not yield the answer for: "${userQuery}". Generate a completely DIFFERENT and better search query. Output ONLY the exact new search query. Do not add conversational text.${locationHint}
+        res.write(
+          `event: ${JSON.stringify({ type: "message", content: `Reformulating search query...` })}\n\n`,
+        );
+        const locationHint = userLocation
+          ? ` If the user is asking for local information, include their location (${userLocation}).`
+          : "";
+        const newQueryPrompt = `The search query "${currentSearchQuery}" did not find relevant results for: "${userQuery}". Generate a DIFFERENT, broader search query focusing on the core product category, domain concepts, or named alternatives. Output ONLY the new search query.${locationHint}
 
-Example 1:
-Failed Query: "fifa winners"
-User Question: "Who won the fifa world cup in 2018?"
-New Search Query: fifa world cup 2018 champion
-
-Now do the following:
 Failed Query: "${currentSearchQuery}"
 User Question: "${userQuery}"
 New Search Query:`;
-          const newQueryRes = await ollama.chat({
-            model: model,
-            messages: [{ role: "user", content: newQueryPrompt }],
-            stream: false,
-          });
-          const rawNewQuery = (newQueryRes.message?.content || "").replace(/["']/g, "").trim();
-          currentSearchQuery = rawNewQuery.replace(/^.*New Search Query:\s*/i, "").trim() || currentSearchQuery;
-          if (currentSearchQuery) queriesAttempted.push(currentSearchQuery);
-
-          console.log("Sleeping 2.5 seconds to avoid DDG rate limits...");
-          await new Promise((r) => setTimeout(r, 2500));
+        const newQueryRes = await ollama.chat({
+          model: model,
+          messages: [{ role: "user", content: newQueryPrompt }],
+          stream: false,
+          think: false,
+          format: {
+            type: "object",
+            properties: {
+              search_query: { type: "string" },
+            },
+            required: ["search_query"],
+          },
+          options: { temperature: 0, num_predict: 60 },
+        });
+        const rawNewQuery = (newQueryRes.message?.content || "").trim();
+        let cleaned = "";
+        try {
+          const parsed = JSON.parse(rawNewQuery);
+          if (parsed && typeof parsed.search_query === "string") {
+            cleaned = parsed.search_query.trim();
+          }
+        } catch {
+          cleaned = rawNewQuery
+            .replace(/["']/g, "")
+            .split("\n")[0]
+            .replace(/^.*New Search Query:\s*/i, "")
+            .trim();
         }
-
-        const newQueryKey = normalizeQueryKey(currentSearchQuery || userQuery);
-        const hasCachedOnline =
-          Array.isArray(onlineCache[newQueryKey]) &&
-          onlineCache[newQueryKey].length > 0;
-        if (!hasCachedOnline) {
-          console.log(
-            `Agent loop: Searching web for competitors on query: "${currentSearchQuery}"`,
-          );
-          res.write(
-            `event: ${JSON.stringify({ type: "message", content: `Searching web for "${currentSearchQuery}"...` })}\n\n`,
-          );
-
-          let webChunks = [];
-          try {
-            const searchResp = await fetch(
-              `https://html.duckduckgo.com/html/?q=${encodeURIComponent(currentSearchQuery)}`,
-              { headers: { "User-Agent": "Mozilla/5.0" } },
-            );
-            if (!searchResp.ok || searchResp.status === 202) {
-              console.warn(
-                `DuckDuckGo search returned HTTP ${searchResp.status} for "${currentSearchQuery}" (possible rate limit or anti-bot challenge).`,
-              );
-              res.write(
-                `event: ${JSON.stringify({ type: "message", content: `Web search returned HTTP ${searchResp.status} (possible rate limit). Continuing...` })}\n\n`,
-              );
-            }
-            const html = await searchResp.text();
-            const $ = cheerio.load(html);
-            $(".result").each((i, el) => {
-              if (i < 5) {
-                const snippet = $(el).find(".result__snippet").text().trim();
-                const title = $(el).find(".result__a").text().trim();
-                let link = $(el).find(".result__a").attr("href");
-                if (link && link.includes("uddg="))
-                  link = decodeURIComponent(link.split("uddg=")[1].split("&")[0]);
-                if (snippet)
-                  webChunks.push({
-                    text: snippet,
-                    url: link || "Web Search",
-                    title: title,
-                    rank: i + 1,
-                  });
-              }
-            });
-            if (webChunks.length === 0) {
-              console.warn(
-                `DuckDuckGo returned 0 results for "${currentSearchQuery}". Will not cache empty competitor set.`,
-              );
-            }
-          } catch (e) {
-            console.error("DuckDuckGo search failed:", e.message);
-          }
-
-          let crawledContent = {};
-          if (webChunks.length > 0) {
-            const webQueue = await RequestQueue.open(
-              `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            );
-            const crawler = new CheerioCrawler({
-              requestQueue: webQueue,
-              maxRequestsPerCrawl: 5,
-              maxRequestRetries: 0,
-              maxConcurrency: 1, // Crawl 1 page at a time to avoid Cloudflare/WAF IP blocks
-              async requestHandler({ request, $ }) {
-                $("script, style, nav, footer, header").remove();
-                crawledContent[request.url] = $("body")
-                  .text()
-                  .replace(/\s+/g, " ")
-                  .trim()
-                  .substring(0, 1500);
-              },
-            });
-            let validUrls = [];
-            for (const item of webChunks) {
-              res.write(
-                `event: ${JSON.stringify({ type: "url", content: item.url })}\n\n`,
-              );
-              try {
-                const origin = new URL(item.url).origin;
-                const pathname = new URL(item.url).pathname;
-                const robText = await (
-                  await fetch(`${origin}/robots.txt`, {
-                    signal: AbortSignal.timeout(2000),
-                  })
-                ).text();
-
-                let allowed = true;
-                let userAgentAll = false;
-                for (const line of robText.toLowerCase().split("\n")) {
-                  const trimLine = line.trim();
-                  if (trimLine.startsWith("user-agent: *")) userAgentAll = true;
-                  else if (trimLine.startsWith("user-agent:"))
-                    userAgentAll = false;
-                  else if (userAgentAll && trimLine.startsWith("disallow:")) {
-                    const disallowPath = trimLine.split(":")[1].trim();
-                    if (
-                      disallowPath === "/" ||
-                      (disallowPath.length > 1 &&
-                        pathname.startsWith(disallowPath))
-                    ) {
-                      allowed = false;
-                      break;
-                    }
-                  }
-                }
-
-                if (allowed) {
-                  validUrls.push(item.url);
-                } else {
-                  console.log(`Robots disallowed: ${item.url}`);
-                }
-              } catch (_) {
-                validUrls.push(item.url);
-              }
-            }
-            if (validUrls.length > 0) {
-              try {
-                await crawler.run(validUrls);
-                await webQueue.drop();
-              } catch (_) {}
-            }
-          }
-
-          const newOnlineChunks = [];
-          for (const item of webChunks) {
-            let textToEmbed =
-              crawledContent[item.url] && crawledContent[item.url].length > 50
-                ? crawledContent[item.url]
-                : item.text;
-            try {
-              const embedRes = await ollama.embeddings({
-                model: EMBED_MODEL,
-                prompt: textToEmbed,
-              });
-              const newChunk = {
-                chunk: textToEmbed,
-                embedding: embedRes.embedding,
-                source: item.url,
-                title: item.title,
-                isLocal: false,
-                rank: item.rank,
-              };
-              newOnlineChunks.push(newChunk);
-            } catch (_) {}
-          }
-          if (newOnlineChunks.length > 0) {
-            onlineCache[newQueryKey] = newOnlineChunks;
-            await writeJsonFile(ONLINE_CACHE_FILE, onlineCache);
-          }
+        if (cleaned) {
+          currentSearchQuery = cleaned;
+          queriesAttempted.push(currentSearchQuery);
         }
       }
     }
@@ -852,6 +1071,10 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
       messages: ollamaMessages,
       stream: true,
       think: isThinking,
+      options: {
+        num_ctx: 8192,
+        num_predict: 4096,
+      },
     });
 
     for await (const chunk of stream) {
@@ -994,12 +1217,19 @@ app.post("/api/clear-local-index", async (req, res) => {
   }
 });
 
-app.post("/api/clear-web-cache", async (req, res) => {
+app.post("/api/clear-competitors", async (req, res) => {
   try {
-    await writeJsonFile(ONLINE_CACHE_FILE, {});
+    const { url } = req.body || {};
+    if (url) {
+      const competitors = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+      delete competitors[url];
+      await writeJsonFile(CUSTOM_COMPETITORS_FILE, competitors);
+    } else {
+      await writeJsonFile(CUSTOM_COMPETITORS_FILE, {});
+    }
     res.json({ success: true });
   } catch (error) {
-    console.error("Clear web cache error:", error);
+    console.error("Clear competitors error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1007,7 +1237,7 @@ app.post("/api/clear-web-cache", async (req, res) => {
 app.post("/api/clear-index", async (req, res) => {
   try {
     await writeJsonFile(LOCAL_INDEX_FILE, {});
-    await writeJsonFile(ONLINE_CACHE_FILE, {});
+    await writeJsonFile(CUSTOM_COMPETITORS_FILE, {});
     res.json({ success: true });
   } catch (error) {
     console.error("Clear index error:", error);

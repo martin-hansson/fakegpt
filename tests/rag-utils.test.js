@@ -6,8 +6,12 @@ import {
   cosineSimilarity,
   normalizeQueryKey,
   normalizeSiteUrl,
+  canonicalizeCrawlUrl,
+  selectDiverseTopK,
   getSitePrefix,
   isUrlWithinPrefix,
+  isSitemapUrl,
+  parseSitemapUrls,
   getSitemapCandidates,
   extractChunksFromHtml,
   parseEvaluatorResponse,
@@ -57,18 +61,39 @@ test("getSitePrefix and isUrlWithinPrefix prevent /after/ from crawling /before/
   );
 });
 
-test("getSitemapCandidates scopes to directory prefix and does not leak to shared root", () => {
+test("getSitemapCandidates scopes to directory prefix and supports direct sitemap.xml URLs", () => {
   assert.deepEqual(
     getSitemapCandidates("https://people.dsv.su.se/~stud1234/after/"),
     ["https://people.dsv.su.se/~stud1234/after/sitemap.xml"],
   );
   assert.deepEqual(
-    getSitemapCandidates("https://mybrand.example.com/"),
-    ["https://mybrand.example.com/sitemap.xml"],
+    getSitemapCandidates("https://people.dsv.su.se/~stud1234/after/sitemap.xml"),
+    ["https://people.dsv.su.se/~stud1234/after/sitemap.xml"],
+  );
+  assert.equal(
+    isSitemapUrl("https://people.dsv.su.se/~stud1234/after/sitemap.xml"),
+    true,
+  );
+  assert.equal(
+    isSitemapUrl("https://people.dsv.su.se/~stud1234/after/index.html"),
+    false,
+  );
+  const xml = `<urlset>
+    <url><loc>https://people.dsv.su.se/~stud1234/after/index.html</loc></url>
+    <url><loc>https://people.dsv.su.se/~stud1234/after/specs.html</loc></url>
+    <url><loc>https://people.dsv.su.se/~stud1234/before/index.html</loc></url>
+  </urlset>`;
+  const prefix = getSitePrefix("https://people.dsv.su.se/~stud1234/after/sitemap.xml");
+  assert.deepEqual(
+    parseSitemapUrls(xml, prefix, "https://people.dsv.su.se/~stud1234/after/sitemap.xml"),
+    [
+      "https://people.dsv.su.se/~stud1234/after/index.html",
+      "https://people.dsv.su.se/~stud1234/after/specs.html",
+    ],
   );
 });
 
-test("extractChunksFromHtml preserves <article><header><h1> and summary in demo/optimized/index.html", () => {
+test("extractChunksFromHtml preserves <article><header><h1>, decimals, and summary in demo/optimized/index.html", () => {
   const demoHtml = fs.readFileSync(
     path.join(process.cwd(), "demo/optimized/index.html"),
     "utf-8",
@@ -79,8 +104,10 @@ test("extractChunksFromHtml preserves <article><header><h1> and summary in demo/
   );
   assert.match(title, /NordicSleep/);
   const joined = chunks.map((c) => c.text).join("\n");
-  assert.match(joined, /NordicSleep: The Premier Breathable Cooling Weighted Blanket/);
-  assert.match(joined, /maintains thermal neutrality throughout the night/);
+  assert.match(joined, /\[NordicSleep Organic Linen Weighted Blanket for Hot Sleepers\]/);
+  assert.match(joined, /0\.8mm micro-glass beads/);
+  assert.match(joined, /TOG 1\.5 thermal rating/);
+  assert.match(joined, /6\.0 kg, 7\.5 kg, and 9\.0 kg/);
   assert.match(joined, /Structured Data \(JSON-LD\)/);
   assert.match(joined, /Meta Description:/);
 });
@@ -180,4 +207,33 @@ test("isTrivialGreeting matches greetings and allows real questions", () => {
     isTrivialGreeting("Hey, what is the best weighted blanket for hot sleepers?"),
     false,
   );
+});
+
+test("canonicalizeCrawlUrl deduplicates / and /index.html", () => {
+  assert.equal(
+    canonicalizeCrawlUrl("http://localhost:8088/optimized/"),
+    canonicalizeCrawlUrl("http://localhost:8088/optimized/index.html"),
+  );
+  assert.equal(
+    canonicalizeCrawlUrl("https://example.com/site/index.htm#top"),
+    "https://example.com/site",
+  );
+});
+
+test("selectDiverseTopK caps per-site chunks to promote source diversity", () => {
+  const chunks = [
+    { source: "http://localhost:8088/a.html", isLocal: true, similarity: 0.9 },
+    { source: "http://localhost:8088/b.html", isLocal: true, similarity: 0.88 },
+    { source: "http://localhost:8088/c.html", isLocal: true, similarity: 0.86 },
+    { source: "http://localhost:8088/d.html", isLocal: true, similarity: 0.84 },
+    { source: "https://sleepopolis.com/p1", isLocal: false, similarity: 0.8 },
+    { source: "https://sleepopolis.com/p2", isLocal: false, similarity: 0.78 },
+    { source: "https://sleepopolis.com/p3", isLocal: false, similarity: 0.76 },
+    { source: "https://mattressnerd.com/p1", isLocal: false, similarity: 0.75 },
+  ];
+  const top5 = selectDiverseTopK(chunks, 5, 2);
+  assert.equal(top5.length, 5);
+  assert.equal(top5.filter((c) => c.isLocal).length, 2);
+  assert.equal(top5.filter((c) => c.source.includes("sleepopolis.com")).length, 2);
+  assert.equal(top5.filter((c) => c.source.includes("mattressnerd.com")).length, 1);
 });

@@ -39,17 +39,17 @@ Before starting, follow the installation and startup instructions in [README.md]
 
 ### 1.1 Choose a Niche and Invent a Brand
 
-Pick **one** of the following pre-tested niches (all English-language, with active real-world web competition):
+Pick **one** of the following 5 curated niches. FakeGPT comes pre-loaded with a real-world competitor corpus (200+ real web pages per niche) so your website competes against genuine online sources reliably and without live search rate limits:
 
 | ID | Niche | Domain Type |
 | --- | --- | --- |
-| `cooling-weighted-blankets` | Breathable cooling weighted blankets for hot sleepers | Consumer product |
-| `ergonomic-chairs-petite` | Ergonomic office chairs for petite users and small home offices | Consumer product |
-| `office-anc-headphones` | Noise-cancelling headphones for open-plan offices and voice calls | Consumer tech |
-| `wide-trail-shoes` | Lightweight waterproof trail running shoes for wide feet | Outdoor / sports gear |
-| `privacy-pm-software` | Privacy-focused project management software for small remote teams | B2B / SaaS |
-| `ecommerce-inventory-software` | Automated inventory tracking software for small e-commerce warehouses | B2B / SaaS |
-| `vegan-bakery-stockholm` | Specialty vegan and allergy-friendly custom cake bakery in Stockholm | Local business / service |
+| `cooling-weighted-blankets` | Cooling Weighted Blankets for Hot Sleepers | Consumer product |
+| `ergonomic-chairs-petite` | Ergonomic Office Chairs for Petite Users | Consumer product |
+| `office-anc-headphones` | Noise-Cancelling Headphones for Open Offices | Consumer tech |
+| `privacy-pm-software` | Privacy-Focused Project Management Software | B2B / SaaS |
+| `vegan-bakery-stockholm` | Vegan & Allergy-Friendly Custom Cakes in Stockholm | Local business / service |
+
+*(If you are doing real-life GEO outside these 5 niches, select **Custom (manual competitor URLs)** in FakeGPT's Competitor Niche dropdown and add 1–3 real competitor websites manually.)*
 
 Invent a **fictional brand/product/service** with a distinct proper name inside your chosen niche. Using a fictional brand ensures the LLM has no prior knowledge of it in its training weights, so every mention and citation is strictly driven by your RAG optimization.
 
@@ -88,19 +88,19 @@ Write the **Before** site as a realistic, naive website *before* GEO/SEO optimiz
 
 ## Step 3: Baseline Testing in FakeGPT ("Before")
 
-1. Start FakeGPT (`npm run dev`) and open it in your browser.
-2. In the sidebar under **LAB SETTINGS**, paste your public **`/before/`** URL and click the **Crawl** (refresh) button.
-   - Verify in the sidebar that your `/before/` URL is listed under **Indexed**, along with the number of pages and chunks extracted.
+1. Start FakeGPT (`npm run dev`) and open it in your browser (`http://localhost:5173`).
+2. In the sidebar under **LAB SETTINGS**, select your chosen **Competitor Niche** from the dropdown (verify the `Corpus:` line shows the loaded pages and chunks).
+3. Paste your public **`/before/`** website URL (or direct `sitemap.xml` URL) into the URL field and click the **Crawl** (refresh) button.
+   - Verify in the sidebar that your `/before/` URL is listed under **Target**, along with the number of pages and chunks extracted.
    - *(Note: FakeGPT scopes crawling strictly to the directory prefix you submit, so `/before/` and `/after/` will not crawl into each other.)*
-3. For each of your test prompts, click **New chat**, enter the prompt, and wait for FakeGPT to finish. (Keep your multi-turn follow-up inside the same chat as its parent prompt.)
-4. Expand **View Sources** under each assistant reply and record:
+4. For each of your test prompts, click **New chat**, enter the prompt, and wait for FakeGPT to finish. (Keep your multi-turn follow-up inside the same chat as its parent prompt.)
+5. Expand **View Sources** under each assistant reply and record:
    - **LLM Query Rewrite**: How FakeGPT rewrote your conversational prompt into a search query.
-   - **Stage 1 (Retrieval)**: Whether any chunk from your `(Target Site)` appeared in the top 5, its rank (`#1`–`#5`), and its cosine similarity compared to online competitors.
+   - **Stage 1 (Retrieval)**: Whether any chunk from your `(Target Site)` appeared in the top 5, its rank (`#1`–`#5`), and its cosine similarity compared to the real competitor corpus.
    - **Stage 2 (Relevance Evaluator)**: Whether your chunk(s) were `[2. Evaluator: Accepted]` or `[2. Evaluator: Rejected]`.
    - **Stage 3 (Generation & Citation)**: Whether your site was `[3. Cited in Answer]`, and whether your brand was mentioned accurately and recommended/framed favourably.
-5. Take screenshots of your FakeGPT outputs (with **View Sources** expanded) for your report.
-6. Click the **Export Chat History (JSON)** button (download icon next to *Recents*) and save the file as **`chats-before.json`**.
-7. Clear your chat history (trash icon next to *Recents*) to prepare for the **After** run. **Do not clear the web competitor cache** (globe icon) unless DuckDuckGo returned a rate-limit warning — keeping the cached web competitors ensures a controlled A/B comparison against the exact same online results.
+6. Take screenshots of your FakeGPT outputs (with **View Sources** expanded) for your report.
+7. Click the **Export Chat History (JSON)** button (download icon next to *Recents*) and save the file as **`chats-before.json`**, then clear chat history (trash icon next to *Recents*) to prepare for the **After** run.
 
 ---
 
@@ -139,8 +139,8 @@ Apply **all** writing-style principles from the lecture across your optimized pa
 ## Step 5: "After" Testing in FakeGPT
 
 1. Publish your `/after/` site publicly.
-2. In FakeGPT's **LAB SETTINGS**, enter your **`/after/`** URL and click **Crawl**.
-   - Crawling a new URL automatically replaces the active local site index while preserving the cached online competitors.
+2. In FakeGPT's **LAB SETTINGS**, keep the same **Competitor Niche** selected, enter your **`/after/`** URL (or `/after/sitemap.xml`), and click **Crawl**.
+   - Crawling a new URL automatically replaces your active target site while keeping the exact same competitor corpus for a fair A/B test.
    - Verify in the sidebar that your `/after/` URL is now indexed and check the page count (confirming all 3–5 pages were crawled!) and chunk count.
 3. Re-run the **exact same 3–4 test prompts** in fresh chats (keeping the multi-turn follow-up paired with its parent prompt).
 4. Open **View Sources** for each response and record Stage 1, Stage 2, and Stage 3 results.
