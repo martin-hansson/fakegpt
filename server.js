@@ -1226,16 +1226,16 @@ New Search Query:`;
       }
     }
 
-    // Extract top 8 for LLM
+    // Extract top accepted sources for LLM (up to 6 to keep small-LLM reasoning fast & complete)
     if (requiresSearch && foundAnswer) {
       if (finalRelevantIndices) {
-        selectedChunks = finalRelevantIndices.map((i) => ({
+        selectedChunks = finalRelevantIndices.slice(0, 6).map((i) => ({
           ...topK[i],
           originalIndex: i,
         }));
       } else {
         selectedChunks = topK
-          .slice(0, 8)
+          .slice(0, 6)
           .map((c, i) => ({ ...c, originalIndex: i }));
       }
     } else if (requiresSearch && !foundAnswer) {
@@ -1333,7 +1333,7 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
       think: isThinking,
       options: {
         num_ctx: 8192,
-        num_predict: 4096,
+        num_predict: 6144,
       },
     });
 
