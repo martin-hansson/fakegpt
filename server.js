@@ -61,6 +61,18 @@ if (!fsSync.existsSync(DATA_DIR)) {
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
+// Single source of truth for Ollama chat options so num_ctx never drifts across calls
+function ollamaChat({ options = {}, ...params }) {
+  return ollama.chat({
+    model: GEN_MODEL,
+    ...params,
+    options: {
+      num_ctx: GEN_NUM_CTX,
+      ...options,
+    },
+  });
+}
+
 const isThinking = await ollama
   .show({ model: GEN_MODEL })
   .then((res) => res.capabilities?.includes("thinking") || false)
@@ -910,7 +922,7 @@ Search query:`;
         res.write(
           `event: ${JSON.stringify({ type: "message", content: `Rewriting query for search intent...` })}\n\n`,
         );
-        const rewriteRes = await ollama.chat({
+        const rewriteRes = await ollamaChat({
           model: model,
           messages: [{ role: "user", content: rewritePrompt }],
           stream: false,
@@ -923,7 +935,7 @@ Search query:`;
             },
             required: ["requires_search", "search_query"],
           },
-          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 80 },
+          options: { temperature: 0, num_predict: 80 },
         });
 
         const rawRewrite = (rewriteRes.message?.content || "").trim();
@@ -1125,7 +1137,7 @@ Question: "${currentSearchQuery}"
 (Original User Input: "${userQuery}")
 
 Return JSON with "relevant_sources": an array of 1-based source numbers (from 1 to ${topK.length}) that contain factual information, specifications, descriptions, or answers directly relevant to the Question. Exclude completely off-topic or vague filler sources. Return an empty array [] if none are relevant.`;
-        const evalRes = await ollama.chat({
+        const evalRes = await ollamaChat({
           model: model,
           messages: [{ role: "user", content: evalPrompt }],
           stream: false,
@@ -1140,7 +1152,7 @@ Return JSON with "relevant_sources": an array of 1-based source numbers (from 1 
             },
             required: ["relevant_sources"],
           },
-          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 60 },
+          options: { temperature: 0, num_predict: 60 },
         });
         const contentText = (evalRes.message?.content || "").trim();
         const thinkingText = (evalRes.message?.thinking || "").trim();
@@ -1192,7 +1204,7 @@ Return JSON with "relevant_sources": an array of 1-based source numbers (from 1 
 Failed Query: "${currentSearchQuery}"
 User Question: "${userQuery}"
 New Search Query:`;
-        const newQueryRes = await ollama.chat({
+        const newQueryRes = await ollamaChat({
           model: model,
           messages: [{ role: "user", content: newQueryPrompt }],
           stream: false,
@@ -1204,7 +1216,7 @@ New Search Query:`;
             },
             required: ["search_query"],
           },
-          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 60 },
+          options: { temperature: 0, num_predict: 60 },
         });
         const rawNewQuery = (newQueryRes.message?.content || "").trim();
         let cleaned = "";
@@ -1327,13 +1339,12 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
     console.log(
       `Thinking: ${isThinking ? "Enabled" : "Disabled"}. Streaming response...`,
     );
-    const stream = await ollama.chat({
+    const stream = await ollamaChat({
       model: model,
       messages: ollamaMessages,
       stream: true,
       think: isThinking,
       options: {
-        num_ctx: GEN_NUM_CTX,
         num_predict: 6144,
       },
     });
@@ -1409,7 +1420,7 @@ app.post("/api/chats/:id/title", async (req, res) => {
       .join("\n");
     const titlePrompt = `Generate a very brief, concise title (max 5 words) for this conversation based on this recent exchange:\n\n${recentMessages}\n\nTitle:`;
 
-    const titleRes = await ollama.chat({
+    const titleRes = await ollamaChat({
       model: model,
       messages: [{ role: "user", content: titlePrompt }],
       stream: false,
@@ -1419,7 +1430,7 @@ app.post("/api/chats/:id/title", async (req, res) => {
         properties: { title: { type: "string" } },
         required: ["title"],
       },
-      options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 30 },
+      options: { temperature: 0, num_predict: 30 },
     });
 
     const rawTitle = (titleRes.message?.content || "").trim();
