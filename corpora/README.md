@@ -1,6 +1,6 @@
 # Pre-Crawled Competitor Corpora
 
-This directory stores pre-crawled real-world competitor corpora (`*.json` and `manifest.json`) used by FakeGPT so students compete against real online websites without live search rate-limiting (HTTP 202 / CAPTCHAs) in the classroom.
+This directory stores pre-crawled real-world competitor corpora (`*.json`, `*.f32`, and `manifest.json`) used by FakeGPT so students compete against real online websites without live search rate-limiting (HTTP 202 / CAPTCHAs) in the classroom.
 
 ## For Students
 Download [`corpora.zip`](https://people.dsv.su.se/~thva5058/corpora.zip) (`https://people.dsv.su.se/~thva5058/corpora.zip`) and extract its `.json` and `.f32` files directly into this `corpora/` folder before starting FakeGPT (`npm run dev`).
@@ -12,4 +12,4 @@ To rebuild all curated niche corpora from scratch using the URL list in `scripts
 node scripts/build-corpus.mjs
 ```
 
-All `corpora/*.json` files are gitignored so third-party website text is never committed to the public repository.
+All `corpora/*.json` and `corpora/*.f32` files are gitignored so third-party website text is never committed to the public repository.
