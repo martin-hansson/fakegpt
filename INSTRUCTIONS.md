@@ -26,17 +26,16 @@ In this lab, you will create a small website for a fictional brand in one of fiv
 
 ## Step 1: Choose a Niche and Invent a Brand
 
-Pick **one** of the following five niches and invent a fictional brand (with a proper name) in that niche. Write your website, simulated external sources, and prompts in **English**:
+Pick **one** of the following four niches and invent a fictional brand (with a proper name) in that niche. Write your website, simulated external sources, and prompts in **English**:
 
 | Niche ID | Niche | Domain Type |
 | --- | --- | --- |
-| `cooling-weighted-blankets` | Cooling Weighted Blankets for Hot Sleepers | Consumer product |
 | `ergonomic-chairs-petite` | Ergonomic Office Chairs for Petite Users | Consumer product |
 | `office-anc-headphones` | Noise-Cancelling Headphones for Open Offices | Consumer tech |
 | `privacy-pm-software` | Privacy-Focused Project Management Software | B2B / SaaS |
 | `vegan-bakery-stockholm` | Vegan & Allergy-Friendly Custom Cakes in Stockholm | Local business / service |
 
-*(If you are doing **real-life GEO** outside these five niches, select **Custom (manual competitor URLs)** in FakeGPT's Competitor Niche dropdown and add 1–3 real competitor websites manually.)*
+_Note: `cooling-weighted-blankets` is for demo/reference purposes and is therefor **not** allowed as your niche._
 
 ---
 
@@ -48,7 +47,7 @@ Pick **one** of the following five niches and invent a fictional brand (with a p
    - Qualitative and quantitative details.
 2. **Do not optimize it yet.** Keep it as a realistic, naive baseline site.
 3. Host both versions publicly in separate subdirectories so both stay live for grading — using your **DSV student web space** (*Personlig webbsida*) or **GitHub Pages**:
-   - Example: `https://people.dsv.su.se/~youruser/geo/before/` and `.../geo/after/`
+   - Example: `https://people.dsv.su.se/~youruser/geo/before/` and `.../geo/after/` (hint: put the sites in `~youruser/public_html` on Triton)
    - Example: `https://youruser.github.io/geo-lab/before/` and `.../geo-lab/after/`
 4. **Plain static HTML (with optional CSS) is strongly recommended** because FakeGPT uses a static HTML crawler (without executing JavaScript) and plain HTML gives you full control over semantic structure, tables, lists, and `sitemap.xml`. *(If you use Blogger.com or WordPress.com, check `Target:` in FakeGPT's sidebar immediately after crawling to verify all pages and chunks were extracted.)*
 5. Copy your `/before/` folder to `/after/` later so `/before/` stays untouched as a reference.
@@ -109,4 +108,5 @@ Submit a **PDF report** on **NextiLearn** (plus exported `chats-before.json` and
 1. **Group member names**, chosen niche, brand name, and clickable public URLs to both **Before** and **After** websites *(keep both live until grading finishes)*.
 2. **Optimization breakdown:** Describe and justify all optimization features you implemented (including HTML/text snippets where helpful).
 3. **FakeGPT results:** Show all three prompts, answers, and expanded **View Sources** screenshots before and after optimization.
-4. **"Before-and-After" comparison table** summarizing features before optimization, after optimization, and why each change matters (covering *Being a recognized brand*, *Being the recommended brand*, and *Brand comparison*).
+4. **Failure & iteration analysis:** Document at least **one concrete case** where your brand was initially outranked in Stage 1, rejected by the Stage 2 relevance evaluator, or not cited/favourably framed in Stage 3 (e.g., on the comparison prompt). Use **View Sources** to diagnose *why* it happened (such as vague prose, pronouns losing context in isolated chunks, missing comparative metrics, or lack of third-party consensus) and explain the specific change you made to fix it (or why a competitor still beat it).
+5. **"Before-and-After" comparison table** summarizing features before optimization, after optimization, and why each change matters (covering *Being a recognized brand*, *Being the recommended brand*, and *Brand comparison*).
