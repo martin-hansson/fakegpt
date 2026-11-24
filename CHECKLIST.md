@@ -4,7 +4,7 @@ This README is a step-by-step checklist to verify that FakeGPT and the pre-crawl
 
 **What you need before starting:**
 - GitHub repo: `https://github.com/martin-hansson/fakegpt`
-- Competitor bundle: `corpora.zip` (~22 MB, `https://people.dsv.su.se/~thva5058/corpora.zip`)
+- Competitor bundle: `corpora.zip` (~18 MB compressed, downloaded automatically by the setup script from `https://people.dsv.su.se/~thva5058/corpora.zip`)
 
 ---
 
@@ -31,17 +31,18 @@ ollama --version
 
 ---
 
-## Step 2: Install & Launch FakeGPT with `corpora.zip`
+## Step 2: Run the Setup Script & Launch FakeGPT
 
 ```bash
 git clone https://github.com/martin-hansson/fakegpt.git
 cd fakegpt
 ```
 
-1. Extract `corpora.zip` into the `corpora/` folder inside `fakegpt/` (so `corpora/manifest.json`, `*.json`, and `*.f32` sit inside `corpora/`).
-2. Install dependencies and start FakeGPT:
+1. **Test the automatic setup script** (checks Node/Ollama, pulls `qwen3:4b` + `embeddinggemma`, downloads & extracts `corpora.zip` into `corpora/`, and runs `npm install`):
+   - **Windows:** Double-click `setup.bat` (or run `.\setup.bat` in PowerShell).
+   - **Linux / macOS:** Run `./setup.sh`.
+2. Start FakeGPT:
    ```bash
-   npm install
    npm run dev
    ```
    *(Windows PowerShell note: if `npm` is blocked by execution policy, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once and retry.)*
@@ -74,8 +75,12 @@ No need to build a website — the repo includes ready-made `demo/unoptimized/` 
    - Paste `http://localhost:8088/optimized/sitemap.xml` into **Your site URL or sitemap.xml** and click the refresh button.
    - Verify the sidebar updates to **4 pages · 30 chunks** (automatically replacing the unoptimized site).
    - Click **New chat** and ask the exact same prompt: *"Which breathable cooling weighted blanket is best for people who overheat at night?"*
-   - Expand **View Sources**: `NordicSleep` (`localhost:8088/optimized/...`) should now rank **#1**, show `[2. Evaluator: Accepted]` and `[3. Cited in Answer]`, alongside 3 real competitors.
-4. **Test Export:** Click the small **Download** icon next to `Recents` and confirm `fakegpt-chats-YYYY-MM-DD.json` downloads cleanly.
+   - Expand **View Sources**: `NordicSleep` (`localhost:8088/optimized/...`) should now rank **#1**, show `[2. Evaluator: Accepted]` and `[3. Cited in Answer]`, alongside real competitors (top 8 sources total).
+4. **Test Fakepedia & Totally Unbiased Reviews (top tabs):**
+   - Click the **Fakepedia** tab, enter title `NordicSleep` and 2 short factual sentences, and click **Save & Index Article** (confirm green dot appears on the tab).
+   - Click the **Totally Unbiased Reviews** tab, enter brand `NordicSleep` and 1 short review, and click **Save & Index** (confirm green dot appears on the tab).
+   - Switch back to **Chat**, ask the same prompt in a **New chat**, and confirm `(Fakepedia)` or `(Totally Unbiased Reviews)` can appear in **View Sources**.
+5. **Test Export:** Click the small **Download** icon next to `Recents` and confirm `fakegpt-chats-YYYY-MM-DD.json` downloads cleanly (containing both chats and the saved Fakepedia/Reviews data).
 
 ---
 
