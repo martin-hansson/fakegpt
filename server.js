@@ -24,6 +24,7 @@ import {
 // Model configuration (can be overridden via environment variables)
 const GEN_MODEL = process.env.GEN_MODEL || "qwen3:4b";
 const EMBED_MODEL = process.env.EMBED_MODEL || "embeddinggemma"; // If you change this, remember you need to crawl the site again.
+const GEN_NUM_CTX = Number(process.env.GEN_NUM_CTX) || 8192; // Consistent across all chat calls so Ollama never reloads KV cache mid-turn
 
 const app = express();
 app.use(cors());
@@ -922,7 +923,7 @@ Search query:`;
             },
             required: ["requires_search", "search_query"],
           },
-          options: { temperature: 0, num_predict: 80 },
+          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 80 },
         });
 
         const rawRewrite = (rewriteRes.message?.content || "").trim();
@@ -1139,7 +1140,7 @@ Return JSON with "relevant_sources": an array of 1-based source numbers (from 1 
             },
             required: ["relevant_sources"],
           },
-          options: { temperature: 0, num_predict: 60 },
+          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 60 },
         });
         const contentText = (evalRes.message?.content || "").trim();
         const thinkingText = (evalRes.message?.thinking || "").trim();
@@ -1203,7 +1204,7 @@ New Search Query:`;
             },
             required: ["search_query"],
           },
-          options: { temperature: 0, num_predict: 60 },
+          options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 60 },
         });
         const rawNewQuery = (newQueryRes.message?.content || "").trim();
         let cleaned = "";
@@ -1332,7 +1333,7 @@ CRITICAL: At the end of EVERY response, ask a friendly follow-up question to kee
       stream: true,
       think: isThinking,
       options: {
-        num_ctx: 8192,
+        num_ctx: GEN_NUM_CTX,
         num_predict: 6144,
       },
     });
@@ -1412,9 +1413,22 @@ app.post("/api/chats/:id/title", async (req, res) => {
       model: model,
       messages: [{ role: "user", content: titlePrompt }],
       stream: false,
+      think: false,
+      format: {
+        type: "object",
+        properties: { title: { type: "string" } },
+        required: ["title"],
+      },
+      options: { num_ctx: GEN_NUM_CTX, temperature: 0, num_predict: 30 },
     });
 
-    chat.title = titleRes.message.content.replace(/["*]/g, "").trim();
+    const rawTitle = (titleRes.message?.content || "").trim();
+    let parsedTitle = rawTitle;
+    try {
+      const obj = JSON.parse(rawTitle);
+      if (obj && typeof obj.title === "string") parsedTitle = obj.title;
+    } catch {}
+    chat.title = parsedTitle.replace(/["*]/g, "").trim() || chat.title;
     chat.updatedAt = new Date().toISOString();
     chats[chatIndex] = chat;
     await writeJsonFile(CHATS_FILE, chats);
