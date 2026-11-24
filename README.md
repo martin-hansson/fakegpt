@@ -50,7 +50,7 @@ $env:GEN_MODEL="llama3.2:3b"; $env:EMBED_MODEL="embeddinggemma"; npm run dev
 ---
 
 ### 4. Add the Pre-Crawled Competitor Corpora
-Download the `corpora.zip` bundle from the course page (Athena / DSV) and extract its `.json` and `.f32` files into the `corpora/` folder inside this project. *(Alternatively, instructors can rebuild the corpora directly from `scripts/niche-urls.json` by running `node scripts/build-corpus.mjs`.)*
+Download [`corpora.zip`](https://people.dsv.su.se/~thva5058/corpora.zip) (`https://people.dsv.su.se/~thva5058/corpora.zip`) and extract its `.json` and `.f32` files into the `corpora/` folder inside this project. *(Alternatively, instructors can rebuild the corpora directly from `scripts/niche-urls.json` by running `node scripts/build-corpus.mjs`.)*
 
 ---
 

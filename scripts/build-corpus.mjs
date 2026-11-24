@@ -5,7 +5,7 @@
  *
  * Output files are written to corpora/<niche>.json + corpora/<niche>.f32
  * (both gitignored so scraped third-party content is never committed publicly;
- * distribute corpora/ via DSV/Athena).
+ * distribute corpora/ via DSV / Triton).
  *
  * Usage:
  *   node scripts/build-corpus.mjs [--niche <id>] [--max-pages 250] [--max-chunks-per-url 8] [--no-embed]
