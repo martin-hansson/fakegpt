@@ -42,6 +42,7 @@ body, html {
   top: 0;
   left: 0;
   z-index: 9999;
+  pointer-events: none;
 }
 
 .no-drag {
@@ -142,7 +143,220 @@ body, html {
   flex-direction: column;
   height: 100%;
   position: relative;
-  padding-top: 56px;
+  padding-top: 0;
+}
+
+.top-nav-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.top-nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.top-nav-tab:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-hover);
+}
+
+.top-nav-tab.active {
+  color: var(--text-primary);
+  background-color: var(--bg-hover);
+  border-color: var(--border-color);
+}
+
+.tab-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #3fb950;
+  display: inline-block;
+}
+
+/* External Simulated Sources Views (Fakepedia & Totally Unbiased Reviews) */
+.ext-page-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2rem;
+}
+
+.ext-page-inner {
+  max-width: 48rem;
+  margin: 0 auto 3rem auto;
+}
+
+.ext-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ext-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  background: var(--bg-hover);
+  padding: 0.45rem 0.8rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border-color);
+}
+
+.ext-tip-box {
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 1.25rem;
+}
+
+.ext-field-group {
+  margin-bottom: 1rem;
+}
+
+.ext-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.ext-input,
+.ext-textarea {
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  background-color: #212121;
+  border: 1px solid var(--border-color);
+  border-radius: 0.65rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.ext-input:focus,
+.ext-textarea:focus {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.ext-textarea {
+  resize: vertical;
+}
+
+.ext-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.ext-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 9999px;
+  border: none;
+  background: #ececec;
+  color: #171717;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.ext-primary-btn:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.ext-primary-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ext-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.95rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.ext-secondary-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ext-secondary-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.review-card {
+  background: #1e1e1e;
+  border: 1px solid var(--border-color);
+  border-radius: 0.85rem;
+  padding: 0.9rem;
+}
+
+.review-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+
+.star-btn,
+.icon-ghost-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.2rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.icon-ghost-btn:hover {
+  color: var(--error);
 }
 
 .messages-area {

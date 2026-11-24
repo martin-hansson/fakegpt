@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, Download, Plus, X } from 'lucide-react';
+import { ArrowUp, RefreshCw, Check, PanelLeftClose, SquarePen, Trash2, MoreHorizontal, Edit2, Download, Plus, X, MessageSquare, BookOpen, Star } from 'lucide-react';
+import { FakepediaView, ReviewsView, type ExternalSourcesData } from './ExternalSourcesViews';
 import './index.css';
+
+type ActiveTab = 'chat' | 'fakepedia' | 'reviews';
 
 type NicheSummary = {
   id: string;
@@ -71,7 +74,12 @@ function App() {
   const [competitorUrl, setCompetitorUrl] = useState('');
   const [isCrawlingCompetitor, setIsCrawlingCompetitor] = useState(false);
   const [isSwitchingNiche, setIsSwitchingNiche] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('chat');
   const [healthWarnings, setHealthWarnings] = useState<string[]>([]);
+  const [externalSources, setExternalSources] = useState<ExternalSourcesData>({
+    fakepedia: { enabled: false, title: '', content: '', updatedAt: null, chunksCount: 0 },
+    reviews: { enabled: false, brandName: '', items: [], updatedAt: null, chunksCount: 0 },
+  });
   const [indexStatus, setIndexStatus] = useState<IndexStatus>({
     localSite: null,
     activeNiche: 'custom',
@@ -80,6 +88,18 @@ function App() {
     customCompetitors: [],
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchExternalSources = async () => {
+    try {
+      const res = await fetch('/api/external-sources');
+      if (res.ok) {
+        const data: ExternalSourcesData = await res.json();
+        setExternalSources(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchHealth = async () => {
     try {
@@ -123,6 +143,7 @@ function App() {
   useEffect(() => {
     fetchChats();
     fetchIndexStatus();
+    fetchExternalSources();
     fetchHealth();
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
@@ -315,10 +336,19 @@ function App() {
 
   const handleExportChats = async () => {
     try {
-      const res = await fetch('/api/chats');
-      if (!res.ok) throw new Error('Failed to fetch chats');
-      const data = await res.json();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const [chatsRes, extRes] = await Promise.all([
+        fetch('/api/chats'),
+        fetch('/api/external-sources'),
+      ]);
+      if (!chatsRes.ok) throw new Error('Failed to fetch chats');
+      const chatsData = await chatsRes.json();
+      const extData = extRes.ok ? await extRes.json() : null;
+      const exportPayload = {
+        exportedAt: new Date().toISOString(),
+        externalSources: extData,
+        chats: chatsData,
+      };
+      const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const dateStr = new Date().toISOString().slice(0, 10);
@@ -735,6 +765,23 @@ function App() {
                   </div>
                 )}
 
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem', marginTop: '0.3rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('fakepedia')}
+                    style={{ background: 'transparent', border: 'none', padding: 0, textAlign: 'left', fontSize: '0.7rem', color: externalSources.fakepedia.enabled ? '#58a6ff' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    Fakepedia: {externalSources.fakepedia.enabled && externalSources.fakepedia.chunksCount > 0 ? `On (${externalSources.fakepedia.chunksCount}c)` : 'Off'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('reviews')}
+                    style={{ background: 'transparent', border: 'none', padding: 0, textAlign: 'left', fontSize: '0.7rem', color: externalSources.reviews.enabled ? '#3fb950' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    Reviews: {externalSources.reviews.enabled && externalSources.reviews.chunksCount > 0 ? `On (${externalSources.reviews.chunksCount}c)` : 'Off'}
+                  </button>
+                </div>
+
                 {indexStatus.customCompetitors.length > 0 && (
                   <div style={{ marginTop: '0.3rem' }}>
                     {indexStatus.customCompetitors.map((comp) => (
@@ -760,77 +807,130 @@ function App() {
       </div>
 
       <div className="chat-container">
-        {messages.length === 0 ? (
-          <div className="hero">
-            <h1>What can I help you with?</h1>
-          </div>
+        <div className="top-nav-tabs">
+          <button
+            type="button"
+            className={`top-nav-tab ${activeTab === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveTab('chat')}
+          >
+            <MessageSquare size={15} />
+            <span>Chat</span>
+          </button>
+          <button
+            type="button"
+            className={`top-nav-tab ${activeTab === 'fakepedia' ? 'active' : ''}`}
+            onClick={() => setActiveTab('fakepedia')}
+          >
+            <BookOpen size={15} />
+            <span>Fakepedia</span>
+            {externalSources.fakepedia.enabled && externalSources.fakepedia.chunksCount > 0 && (
+              <span className="tab-active-dot" title="Active in FakeGPT search" />
+            )}
+          </button>
+          <button
+            type="button"
+            className={`top-nav-tab ${activeTab === 'reviews' ? 'active' : ''}`}
+            onClick={() => setActiveTab('reviews')}
+          >
+            <Star size={15} />
+            <span>Totally Unbiased Reviews</span>
+            {externalSources.reviews.enabled && externalSources.reviews.chunksCount > 0 && (
+              <span className="tab-active-dot" title="Active in FakeGPT search" />
+            )}
+          </button>
+        </div>
+
+        {activeTab === 'fakepedia' ? (
+          <FakepediaView
+            initial={externalSources.fakepedia}
+            onSaved={async () => {
+              await fetchExternalSources();
+              await fetchIndexStatus();
+            }}
+          />
+        ) : activeTab === 'reviews' ? (
+          <ReviewsView
+            initial={externalSources.reviews}
+            onSaved={async () => {
+              await fetchExternalSources();
+              await fetchIndexStatus();
+            }}
+          />
         ) : (
-          <div className="messages-area">
-            {messages.map((msg, idx) => {
-              if (msg.role === 'system' || msg.role === 'tool') return null;
-              if (isLoading && idx === messages.length - 1 && msg.role === 'assistant' && msg.content === '') return null;
-              return (
-                <div key={idx} className={`message-wrapper ${msg.role}`}>
-                  <div className="message-content">
-                    <div className="markdown-body">
-                      {msg.thinking && <ThinkingContent thinking={msg.thinking} hasStartedAnswer={!!msg.content} />}
-                      <ReactMarkdown rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
-                      {msg.sources && <SourcesDropdown sources={msg.sources} content={msg.content} rewrittenQuery={msg.rewrittenQuery} />}
+          <>
+            {messages.length === 0 ? (
+              <div className="hero">
+                <h1>What can I help you with?</h1>
+              </div>
+            ) : (
+              <div className="messages-area">
+                {messages.map((msg, idx) => {
+                  if (msg.role === 'system' || msg.role === 'tool') return null;
+                  if (isLoading && idx === messages.length - 1 && msg.role === 'assistant' && msg.content === '') return null;
+                  return (
+                    <div key={idx} className={`message-wrapper ${msg.role}`}>
+                      <div className="message-content">
+                        <div className="markdown-body">
+                          {msg.thinking && <ThinkingContent thinking={msg.thinking} hasStartedAnswer={!!msg.content} />}
+                          <ReactMarkdown rehypePlugins={[rehypeRaw]}>{msg.content}</ReactMarkdown>
+                          {msg.sources && <SourcesDropdown sources={msg.sources} content={msg.content} rewrittenQuery={msg.rewrittenQuery} />}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                
+                {isLoading && (
+                  <div className="message-wrapper assistant">
+                    <div className="message-content">
+                      <div className="markdown-body">
+                        <div className="loading-scroll">
+                          <span className="loading-pulse"></span>
+                          {loadingMessage.type === 'text' ? (
+                            <span className="loading-message">{loadingMessage.message}</span>
+                          ) : (
+                            <span className="loading-message">Checking <a className="loading-message-link" href={loadingMessage.url} target="_blank" rel="noopener noreferrer">{loadingMessage.url?.slice(0, 50)}</a>...</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-            
-            {isLoading && (
-              <div className="message-wrapper assistant">
-                <div className="message-content">
-                  <div className="markdown-body">
-                    <div className="loading-scroll">
-                      <span className="loading-pulse"></span>
-                      {loadingMessage.type === 'text' ? (
-                        <span className="loading-message">{loadingMessage.message}</span>
-                      ) : (
-                        <span className="loading-message">Checking <a className="loading-message-link" href={loadingMessage.url} target="_blank" rel="noopener noreferrer">{loadingMessage.url?.slice(0, 50)}</a>...</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
             )}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
 
-        <div className="input-area-wrapper">
-          <div className="input-box">
-            <textarea
-              className="chat-textarea"
-              placeholder="Ask anything"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-            />
-            <button 
-              className="send-btn" 
-              onClick={handleSubmit}
-              disabled={!input.trim() || isLoading}
-            >
-              <ArrowUp size={16} />
-            </button>
-          </div>
-          <p style={{ 
-            position: 'absolute',
-            bottom: '0.5rem',
-            fontSize: '0.75rem', 
-            color: 'white', 
-            textAlign: 'center', 
-            opacity: 0.5 
-          }}>
-            FakeGPT is a small LLM and will likely make mistakes. Always remember to verify its responses.
-          </p>
-        </div>
+            <div className="input-area-wrapper">
+              <div className="input-box">
+                <textarea
+                  className="chat-textarea"
+                  placeholder="Ask anything"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                />
+                <button 
+                  className="send-btn" 
+                  onClick={handleSubmit}
+                  disabled={!input.trim() || isLoading}
+                >
+                  <ArrowUp size={16} />
+                </button>
+              </div>
+              <p style={{ 
+                position: 'absolute',
+                bottom: '0.5rem',
+                fontSize: '0.75rem', 
+                color: 'white', 
+                textAlign: 'center', 
+                opacity: 0.5 
+              }}>
+                FakeGPT is a small LLM and will likely make mistakes. Always remember to verify its responses.
+              </p>
+            </div>
+          </>
+        )}
       </div>
     </>
   );
@@ -923,7 +1023,9 @@ function SourcesDropdown({ sources, content, rewrittenQuery }: { sources: any[],
                   </div>
                   <span className="source-meta">
                     Stage 1: Ranked #{idx + 1} (Cosine Similarity: {c.similarity.toFixed(3)})
-                    {c.isLocal && <span style={{ color: '#a371f7', marginLeft: '8px', fontWeight: 600 }}>(Target Site)</span>}
+                    {(c.sourceType === 'target' || c.isLocal) && <span style={{ color: '#a371f7', marginLeft: '8px', fontWeight: 600 }}>(Target Site)</span>}
+                    {c.sourceType === 'fakepedia' && <span style={{ color: '#58a6ff', marginLeft: '8px', fontWeight: 600 }}>(Fakepedia)</span>}
+                    {c.sourceType === 'reviews' && <span style={{ color: '#3fb950', marginLeft: '8px', fontWeight: 600 }}>(Totally Unbiased Reviews)</span>}
                   </span>
                   <em>"{c.chunk.replace(/\n/g, ' ')}"</em>
                 </div>

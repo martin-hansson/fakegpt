@@ -8,6 +8,8 @@ import {
   normalizeSiteUrl,
   canonicalizeCrawlUrl,
   selectDiverseTopK,
+  buildFakepediaChunks,
+  buildReviewChunks,
   getSitePrefix,
   isUrlWithinPrefix,
   isSitemapUrl,
@@ -220,20 +222,54 @@ test("canonicalizeCrawlUrl deduplicates / and /index.html", () => {
   );
 });
 
-test("selectDiverseTopK caps per-site chunks to promote source diversity", () => {
+test("selectDiverseTopK supports k=8 and per-sourceType caps for target, fakepedia, and reviews", () => {
   const chunks = [
-    { source: "http://localhost:8088/a.html", isLocal: true, similarity: 0.9 },
-    { source: "http://localhost:8088/b.html", isLocal: true, similarity: 0.88 },
-    { source: "http://localhost:8088/c.html", isLocal: true, similarity: 0.86 },
-    { source: "http://localhost:8088/d.html", isLocal: true, similarity: 0.84 },
-    { source: "https://sleepopolis.com/p1", isLocal: false, similarity: 0.8 },
-    { source: "https://sleepopolis.com/p2", isLocal: false, similarity: 0.78 },
-    { source: "https://sleepopolis.com/p3", isLocal: false, similarity: 0.76 },
-    { source: "https://mattressnerd.com/p1", isLocal: false, similarity: 0.75 },
+    { source: "http://localhost:8088/a.html", isLocal: true, sourceType: "target", similarity: 0.92 },
+    { source: "http://localhost:8088/b.html", isLocal: true, sourceType: "target", similarity: 0.91 },
+    { source: "http://localhost:8088/c.html", isLocal: true, sourceType: "target", similarity: 0.9 },
+    { source: "https://en.wikipedia.org/wiki/NordicSleep", isLocal: false, sourceType: "fakepedia", similarity: 0.89 },
+    { source: "https://en.wikipedia.org/wiki/NordicSleep", isLocal: false, sourceType: "fakepedia", similarity: 0.88 },
+    { source: "https://www.trustpilot.com/review/nordicsleep", isLocal: false, sourceType: "reviews", similarity: 0.87 },
+    { source: "https://www.trustpilot.com/review/nordicsleep", isLocal: false, sourceType: "reviews", similarity: 0.86 },
+    { source: "https://sleepopolis.com/p1", isLocal: false, sourceType: "competitor", similarity: 0.82 },
+    { source: "https://sleepopolis.com/p2", isLocal: false, sourceType: "competitor", similarity: 0.81 },
+    { source: "https://sleepopolis.com/p3", isLocal: false, sourceType: "competitor", similarity: 0.80 },
+    { source: "https://mattressnerd.com/p1", isLocal: false, sourceType: "competitor", similarity: 0.79 },
+    { source: "https://mattressnerd.com/p2", isLocal: false, sourceType: "competitor", similarity: 0.78 },
   ];
-  const top5 = selectDiverseTopK(chunks, 5, 2);
-  assert.equal(top5.length, 5);
-  assert.equal(top5.filter((c) => c.isLocal).length, 2);
-  assert.equal(top5.filter((c) => c.source.includes("sleepopolis.com")).length, 2);
-  assert.equal(top5.filter((c) => c.source.includes("mattressnerd.com")).length, 1);
+  const top8 = selectDiverseTopK(chunks, 8, 2, {
+    __target__: 2,
+    __fakepedia__: 1,
+    __reviews__: 1,
+  });
+  assert.equal(top8.length, 8);
+  assert.equal(top8.filter((c) => c.sourceType === "target").length, 2);
+  assert.equal(top8.filter((c) => c.sourceType === "fakepedia").length, 1);
+  assert.equal(top8.filter((c) => c.sourceType === "reviews").length, 1);
+  assert.equal(top8.filter((c) => c.sourceType === "competitor").length, 4);
+});
+
+test("buildFakepediaChunks and buildReviewChunks format realistic external source URLs", () => {
+  const wiki = buildFakepediaChunks({
+    title: "NordicSleep Blanket",
+    content: "NordicSleep is a Swedish sleep-textile company founded in 2024.\n\nIndependent airflow trials in 2026 reported TOG 1.5 breathability.",
+  });
+  assert.ok(wiki.length >= 1);
+  assert.equal(wiki[0].url, "https://en.wikipedia.org/wiki/NordicSleep_Blanket");
+  assert.equal(wiki[0].title, "NordicSleep Blanket - Wikipedia");
+  assert.equal(wiki[0].sourceType, "fakepedia");
+
+  const revs = buildReviewChunks({
+    brandName: "NordicSleep",
+    items: [
+      { reviewer: "Anna K.", rating: 5, title: "Finally no night sweats", text: "The linen shell stays cool all night." },
+      { reviewer: "Erik L.", rating: 4, title: "Heavy yet breathable", text: "7.5 kg fits my 70 kg weight well." },
+    ],
+  });
+  assert.ok(revs.length >= 1);
+  assert.equal(revs[0].url, "https://www.trustpilot.com/review/nordicsleep");
+  assert.equal(revs[0].title, "NordicSleep Reviews | Trustpilot");
+  assert.equal(revs[0].sourceType, "reviews");
+  assert.match(revs[0].text, /5\/5 stars/);
+  assert.match(revs[0].text, /Anna K\./);
 });

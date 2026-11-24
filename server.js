@@ -9,6 +9,8 @@ import {
   normalizeSiteUrl,
   canonicalizeCrawlUrl,
   selectDiverseTopK,
+  buildFakepediaChunks,
+  buildReviewChunks,
   getSitePrefix,
   isUrlWithinPrefix,
   isSitemapUrl,
@@ -40,6 +42,7 @@ if (DATA_DIR === "/data") {
 }
 const LOCAL_INDEX_FILE = path.join(DATA_DIR, "local_index.json");
 const CUSTOM_COMPETITORS_FILE = path.join(DATA_DIR, "custom_competitors.json");
+const EXTERNAL_SOURCES_FILE = path.join(DATA_DIR, "external_sources.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const CHATS_FILE = path.join(DATA_DIR, "chats.json");
 const CORPORA_DIR =
@@ -72,6 +75,23 @@ app.use(express.static(FRONTEND_DIR));
 
 const SIMILARITY_THRESHOLD = 0.1;
 
+const DEFAULT_EXTERNAL_SOURCES = {
+  fakepedia: {
+    enabled: false,
+    title: "",
+    content: "",
+    updatedAt: null,
+    chunks: [],
+  },
+  reviews: {
+    enabled: false,
+    brandName: "",
+    items: [],
+    updatedAt: null,
+    chunks: [],
+  },
+};
+
 async function initDataStorage() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
@@ -79,6 +99,7 @@ async function initDataStorage() {
   for (const [file, fallback] of [
     [LOCAL_INDEX_FILE, {}],
     [CUSTOM_COMPETITORS_FILE, {}],
+    [EXTERNAL_SOURCES_FILE, DEFAULT_EXTERNAL_SOURCES],
     [SETTINGS_FILE, { activeNiche: null }],
     [CHATS_FILE, []],
   ]) {
@@ -512,10 +533,138 @@ app.post("/api/niches/select", async (req, res) => {
   }
 });
 
+async function readExternalSources() {
+  const raw = await readJsonFile(EXTERNAL_SOURCES_FILE);
+  return {
+    fakepedia: {
+      ...DEFAULT_EXTERNAL_SOURCES.fakepedia,
+      ...(raw?.fakepedia || {}),
+      chunks: Array.isArray(raw?.fakepedia?.chunks) ? raw.fakepedia.chunks : [],
+    },
+    reviews: {
+      ...DEFAULT_EXTERNAL_SOURCES.reviews,
+      ...(raw?.reviews || {}),
+      items: Array.isArray(raw?.reviews?.items) ? raw.reviews.items : [],
+      chunks: Array.isArray(raw?.reviews?.chunks) ? raw.reviews.chunks : [],
+    },
+  };
+}
+
+app.get("/api/external-sources", async (req, res) => {
+  try {
+    const ext = await readExternalSources();
+    res.json({
+      fakepedia: {
+        enabled: !!ext.fakepedia.enabled,
+        title: ext.fakepedia.title || "",
+        content: ext.fakepedia.content || "",
+        updatedAt: ext.fakepedia.updatedAt || null,
+        chunksCount: ext.fakepedia.chunks.length,
+      },
+      reviews: {
+        enabled: !!ext.reviews.enabled,
+        brandName: ext.reviews.brandName || "",
+        items: ext.reviews.items || [],
+        updatedAt: ext.reviews.updatedAt || null,
+        chunksCount: ext.reviews.chunks.length,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to read external sources:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/external-sources/fakepedia", async (req, res) => {
+  try {
+    const { title = "", content = "", enabled = true } = req.body || {};
+    const ext = await readExternalSources();
+    const rawChunks = buildFakepediaChunks({ title, content });
+    const embeddedChunks = [];
+
+    for (const c of rawChunks) {
+      const embRes = await ollama.embeddings({
+        model: EMBED_MODEL,
+        prompt: `${c.title}\n${c.text}`,
+      });
+      embeddedChunks.push({
+        chunk: c.text,
+        source: c.url,
+        title: c.title,
+        sourceType: "fakepedia",
+        embedding: embRes.embedding,
+      });
+    }
+
+    ext.fakepedia = {
+      enabled: Boolean(enabled && embeddedChunks.length > 0),
+      title: title.trim(),
+      content,
+      updatedAt: new Date().toISOString(),
+      chunks: embeddedChunks,
+    };
+    await writeJsonFile(EXTERNAL_SOURCES_FILE, ext);
+
+    res.json({
+      enabled: ext.fakepedia.enabled,
+      title: ext.fakepedia.title,
+      chunksCount: embeddedChunks.length,
+      url: embeddedChunks[0]?.source || null,
+    });
+  } catch (error) {
+    console.error("Failed to save Fakepedia article:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/external-sources/reviews", async (req, res) => {
+  try {
+    const { brandName = "", items = [], enabled = true } = req.body || {};
+    const ext = await readExternalSources();
+    const rawChunks = buildReviewChunks({ brandName, items });
+    const embeddedChunks = [];
+
+    for (const c of rawChunks) {
+      const embRes = await ollama.embeddings({
+        model: EMBED_MODEL,
+        prompt: `${c.title}\n${c.text}`,
+      });
+      embeddedChunks.push({
+        chunk: c.text,
+        source: c.url,
+        title: c.title,
+        sourceType: "reviews",
+        embedding: embRes.embedding,
+      });
+    }
+
+    ext.reviews = {
+      enabled: Boolean(enabled && embeddedChunks.length > 0),
+      brandName: brandName.trim(),
+      items: Array.isArray(items) ? items : [],
+      updatedAt: new Date().toISOString(),
+      chunks: embeddedChunks,
+    };
+    await writeJsonFile(EXTERNAL_SOURCES_FILE, ext);
+
+    res.json({
+      enabled: ext.reviews.enabled,
+      brandName: ext.reviews.brandName,
+      reviewsCount: ext.reviews.items.filter((r) => (r?.text || "").trim()).length,
+      chunksCount: embeddedChunks.length,
+      url: embeddedChunks[0]?.source || null,
+    });
+  } catch (error) {
+    console.error("Failed to save reviews:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/index-status", async (req, res) => {
   try {
     const localIndex = await readJsonFile(LOCAL_INDEX_FILE);
     const customCompetitorsRaw = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+    const ext = await readExternalSources();
     const niches = await listAvailableNiches();
     const activeNiche = await getActiveNicheId();
     const activeNicheInfo =
@@ -560,6 +709,17 @@ app.get("/api/index-status", async (req, res) => {
       activeNicheInfo,
       niches,
       customCompetitors,
+      fakepedia: {
+        enabled: !!ext.fakepedia.enabled,
+        title: ext.fakepedia.title || "",
+        chunksCount: ext.fakepedia.chunks.length,
+      },
+      reviews: {
+        enabled: !!ext.reviews.enabled,
+        brandName: ext.reviews.brandName || "",
+        reviewsCount: ext.reviews.items.filter((r) => (r?.text || "").trim()).length,
+        chunksCount: ext.reviews.chunks.length,
+      },
     });
   } catch (error) {
     console.error("Failed to read index status:", error);
@@ -811,10 +971,12 @@ Search query:`;
     // 1. Offline / Corpus-Backed RAG Search Loop (No external search engine rate limits)
     let combinedIndices = [];
     let localChunks = [];
+    let simulatedExternalChunks = [];
     let competitorChunks = [];
     if (requiresSearch) {
       const localCheck = await readJsonFile(LOCAL_INDEX_FILE);
       const customCompetitors = await readJsonFile(CUSTOM_COMPETITORS_FILE);
+      const extSources = await readExternalSources();
       const activeNiche = await getActiveNicheId();
 
       res.write(
@@ -840,17 +1002,46 @@ Search query:`;
               source: actualSource,
               title: c.title,
               isLocal: true,
+              sourceType: "target",
             };
           });
           localChunks = localChunks.concat(local);
         }
       }
 
+      // Load simulated external sources (Fakepedia & Totally Unbiased Reviews) when enabled
+      if (extSources.fakepedia.enabled && extSources.fakepedia.chunks.length > 0) {
+        simulatedExternalChunks = simulatedExternalChunks.concat(
+          extSources.fakepedia.chunks.map((c) => ({
+            chunk: c.chunk,
+            embedding: c.embedding,
+            source: c.source,
+            title: c.title,
+            isLocal: false,
+            sourceType: "fakepedia",
+          })),
+        );
+      }
+      if (extSources.reviews.enabled && extSources.reviews.chunks.length > 0) {
+        simulatedExternalChunks = simulatedExternalChunks.concat(
+          extSources.reviews.chunks.map((c) => ({
+            chunk: c.chunk,
+            embedding: c.embedding,
+            source: c.source,
+            title: c.title,
+            isLocal: false,
+            sourceType: "reviews",
+          })),
+        );
+      }
+
       // Load pre-crawled niche competitor corpus (if active)
       if (activeNiche && activeNiche !== "custom") {
         try {
           const nicheChunks = await loadNicheCorpusChunks(activeNiche);
-          competitorChunks = competitorChunks.concat(nicheChunks);
+          competitorChunks = competitorChunks.concat(
+            nicheChunks.map((c) => ({ ...c, sourceType: "competitor" })),
+          );
         } catch (err) {
           console.error(`Failed to load corpus "${activeNiche}":`, err.message);
         }
@@ -865,14 +1056,19 @@ Search query:`;
             source: c.source || key,
             title: c.title,
             isLocal: false,
+            sourceType: "competitor",
           }));
           competitorChunks = competitorChunks.concat(custom);
         }
       }
 
-      combinedIndices = [...localChunks, ...competitorChunks];
+      combinedIndices = [
+        ...localChunks,
+        ...simulatedExternalChunks,
+        ...competitorChunks,
+      ];
       console.log(
-        `Search pool: ${localChunks.length} target chunks + ${competitorChunks.length} competitor chunks (niche: ${activeNiche})`,
+        `Search pool: ${localChunks.length} target + ${simulatedExternalChunks.length} simulated external + ${competitorChunks.length} competitor chunks (niche: ${activeNiche})`,
       );
     }
 
@@ -906,7 +1102,11 @@ Search query:`;
       }
       combinedIndices.sort((a, b) => b.similarity - a.similarity);
 
-      topK = selectDiverseTopK(combinedIndices, 5, 2);
+      topK = selectDiverseTopK(combinedIndices, 8, 2, {
+        __target__: 2,
+        __fakepedia__: 1,
+        __reviews__: 1,
+      });
       const contextText = topK
         .map((c, i) => `[[${i + 1}]] ${c.title || c.source}\n${c.chunk}`)
         .join("\n\n");
@@ -1026,7 +1226,7 @@ New Search Query:`;
       }
     }
 
-    // Extract top 5 for LLM
+    // Extract top 8 for LLM
     if (requiresSearch && foundAnswer) {
       if (finalRelevantIndices) {
         selectedChunks = finalRelevantIndices.map((i) => ({
@@ -1035,7 +1235,7 @@ New Search Query:`;
         }));
       } else {
         selectedChunks = topK
-          .slice(0, 5)
+          .slice(0, 8)
           .map((c, i) => ({ ...c, originalIndex: i }));
       }
     } else if (requiresSearch && !foundAnswer) {
@@ -1053,6 +1253,7 @@ New Search Query:`;
       chunk: c.chunk,
       source: c.source,
       isLocal: c.isLocal,
+      sourceType: c.sourceType || (c.isLocal ? "target" : "competitor"),
       similarity: c.similarity || 0,
       isRelevant: finalRelevantIndices
         ? finalRelevantIndices.includes(i)
@@ -1081,6 +1282,7 @@ If the user asks what you can do, proudly describe these capabilities!
 
 You have been provided with 'Context' retrieved from your search engine. 
 CRITICAL RULE: For any factual question, you MUST base your answer SOLELY on the provided Context. DO NOT use your internal general knowledge to answer factual questions. If the provided Context does not contain the answer, you must state that you couldn't find the information in the current search results.
+SOURCE RELIABILITY RULE: When answering recommendation or comparison questions, treat independent third-party sources (such as Wikipedia, Trustpilot customer reviews, and independent testing/review sites) and agreement across multiple independent sources as more reliable than self-promotional claims made only on a brand's own website.
 DO NOT say "Based on the context" or "In the text you shared". Just answer naturally as if you found it online.
 When asked for news briefs or summaries, be highly comprehensive and provide detailed information extracted from the sources.
 
