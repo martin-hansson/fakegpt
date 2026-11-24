@@ -113,7 +113,7 @@ function App() {
     }
   };
 
-  const fetchIndexStatus = async () => {
+  const fetchIndexStatus = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/index-status');
       if (res.ok) {
@@ -122,10 +122,12 @@ function App() {
         if (data.localSite?.url) {
           setTargetUrl(prev => prev || data.localSite!.url);
         }
+        return true;
       }
     } catch (e) {
       console.error(e);
     }
+    return false;
   };
 
   const fetchChats = async () => {
@@ -141,10 +143,25 @@ function App() {
   };
 
   useEffect(() => {
-    fetchChats();
-    fetchIndexStatus();
-    fetchExternalSources();
-    fetchHealth();
+    let cancelled = false;
+    const initBackendState = async () => {
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt++) {
+        const ok = await fetchIndexStatus();
+        if (ok) {
+          if (!cancelled) {
+            fetchChats();
+            fetchExternalSources();
+            fetchHealth();
+          }
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      if (!cancelled) {
+        fetchHealth();
+      }
+    };
+    initBackendState();
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
@@ -167,6 +184,9 @@ function App() {
         }
       );
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const loadChat = async (id: string) => {

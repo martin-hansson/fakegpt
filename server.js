@@ -73,14 +73,16 @@ function ollamaChat({ options = {}, ...params }) {
   });
 }
 
-const isThinking = await ollama
+let isThinking = false;
+ollama
   .show({ model: GEN_MODEL })
-  .then((res) => res.capabilities?.includes("thinking") || false)
+  .then((res) => {
+    isThinking = res.capabilities?.includes("thinking") || false;
+  })
   .catch((err) => {
     console.warn(
       `Could not query Ollama model capabilities for ${GEN_MODEL}: ${err.message}`,
     );
-    return false;
   });
 
 // Serve the compiled Vite static assets
